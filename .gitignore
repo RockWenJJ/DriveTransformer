@@ -137,6 +137,7 @@ dmypy.json
 
 # output & ckpts
 output/
+outputs/
 test/
 ckpts/
 ckpts
@@ -158,3 +159,10 @@ pyrightconfig.json
 tmp_ckpts/
 val/
 *.ipynb
+
+# local data symlink / dataset mounts
+data/bench2drive
+data/bench2drive/
+
+# editor / debugger installers
+*.vsix

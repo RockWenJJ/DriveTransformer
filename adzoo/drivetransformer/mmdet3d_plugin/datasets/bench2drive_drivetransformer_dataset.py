@@ -395,7 +395,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         can_bus[17] = yaw_in_degree
         input_dict['can_bus'] = can_bus
         # ego_lcf_feat
-        ego_lcf_feat = np.zeros(9)
+        ego_lcf_feat = np.zeros(9, dtype=np.float32)
         ego_lcf_feat[0:2] = input_dict['ego_vel'][0:2]
         ego_lcf_feat[2:4] = input_dict['ego_accel'][2:4]
         ego_lcf_feat[4] = input_dict['ego_rotation_rate'][-1]
@@ -404,7 +404,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         ego_lcf_feat[7] = info['ego_vel'][0]
         ego_lcf_feat[8] = info['steer']
         # command. embedding of far and near command type and point.
-        command = np.zeros(140)
+        command = np.zeros(140, dtype=np.float32)
         command[0:6] = self.command2hot(info['command_far'])
         command[6:70] =  self.pos2posemb(self.get_command_xy_in_local(info['command_far_xy'],info['ego_translation'][0:2],yaw))
         command[70:76] = self.command2hot(info['command_near'])
@@ -441,7 +441,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         if command < 0:
             command = 4
         command -= 1
-        cmd_one_hot = np.zeros(max_dim)
+        cmd_one_hot = np.zeros(max_dim, dtype=np.float32)
         cmd_one_hot[command] = 1
         return cmd_one_hot
 
@@ -602,8 +602,8 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         # get past differential trajectory of ego.
         adj_idx_list = range(idx-past_frames*sample_rate,idx+sample_rate,sample_rate)
         cur_frame = self.get_data_by_index(idx)
-        full_adj_track = np.zeros((past_frames+1,2))
-        full_adj_adj_mask = np.zeros(past_frames+1)
+        full_adj_track = np.zeros((past_frames+1,2), dtype=np.float32)
+        full_adj_adj_mask = np.zeros(past_frames+1, dtype=np.float32)
         lidar2ego = cur_frame['sensors']['LIDAR_TOP']['lidar2ego']
         ego2world = np.eye(4)
         ego2world[0:2,3] = cur_frame['ego_translation'][0:2]
@@ -634,10 +634,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
     def get_ego_future_trajs_fix_dis(self,idx,sample_rate,future_frames,use_angle=False):
         # get future trajectory of ego with fixed interval of distance
         cur_frame = self.get_data_by_index(idx)
-        full_adj_track = np.zeros((future_frames,2))
-        full_adj_mask = np.zeros(future_frames)
+        full_adj_track = np.zeros((future_frames,2), dtype=np.float32)
+        full_adj_mask = np.zeros(future_frames, dtype=np.float32)
         world2lidar_lidar_cur = cur_frame['sensors']['LIDAR_TOP']['world2lidar']
-        pre_xy = np.zeros(2)
+        pre_xy = np.zeros(2, dtype=np.float32)
         sampled_num = 0
         pre_dis = 0
         all_node_list = []
@@ -682,8 +682,8 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         # get future trajectory of ego with fixed interval of time
         adj_idx_list = range(idx+sample_rate,idx+(future_frames+1)*sample_rate,sample_rate)
         cur_frame = self.get_data_by_index(idx)
-        full_adj_track = np.zeros((future_frames,2))
-        full_adj_mask = np.zeros(future_frames)
+        full_adj_track = np.zeros((future_frames,2), dtype=np.float32)
+        full_adj_mask = np.zeros(future_frames, dtype=np.float32)
         world2lidar_lidar_cur = cur_frame['sensors']['LIDAR_TOP']['world2lidar']
         for j in range(len(adj_idx_list)):
             adj_idx = adj_idx_list[j]

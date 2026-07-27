@@ -33,8 +33,8 @@ class TrajPreprocess:
         results["gt_traj_fut_classes"] = gt_traj_fut_classes
         
         if self.with_ego_fix_dist:
-            ego_fut_trajs_fix_dist = torch.tensor(results["ego_fut_trajs_fix_dist"]) 
-            ego_fut_trajs_fix_time = torch.tensor(results["ego_fut_trajs_fix_time"])
+            ego_fut_trajs_fix_dist = torch.tensor(results["ego_fut_trajs_fix_dist"], dtype=torch.float32) 
+            ego_fut_trajs_fix_time = torch.tensor(results["ego_fut_trajs_fix_time"], dtype=torch.float32)
             if self.ego_fut_offset_input:
                 ego_fut_trajs_fix_dist = ego_fut_trajs_fix_dist.cumsum(dim=-2) # Add the differential trajectoris
                 ego_fut_trajs_fix_time = ego_fut_trajs_fix_time.cumsum(dim=-2)   
@@ -43,7 +43,7 @@ class TrajPreprocess:
             # assign the label with both type of trajectories
             results["ego_fut_classes"] = self.assign_class_ego(ego_fut_trajs_fix_dist, ego_fut_trajs_fix_time) if self.assign_class_for_ego else torch.tensor([0])
         else:
-            ego_fut_trajs_fix_time = torch.tensor(results["ego_fut_trajs_fix_time"])
+            ego_fut_trajs_fix_time = torch.tensor(results["ego_fut_trajs_fix_time"], dtype=torch.float32)
             if self.ego_fut_offset_input:
                 ego_fut_trajs_fix_time = ego_fut_trajs_fix_time.cumsum(dim=-2)    
                 results["ego_fut_trajs_fix_time"] = ego_fut_trajs_fix_time

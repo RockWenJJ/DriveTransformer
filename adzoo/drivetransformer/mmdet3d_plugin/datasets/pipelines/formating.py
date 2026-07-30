@@ -36,33 +36,19 @@ class CustomFormatBundle3D(DefaultFormatBundle3D):
                 default bundle.
         """
         # results['gt_map_masks'] = DC(to_tensor(results['gt_map_masks']), stack=True)
-        # Cast ego arrays to float32: np.zeros defaults to float64, which breaks
-        # nn.Linear (Double input vs Float weights).
         if self.with_ego:
             if 'ego_his_trajs' in results:
-                results['ego_his_trajs'] = DC(to_tensor(results['ego_his_trajs'][None, ...]).float(), stack=True)
+                results['ego_his_trajs'] = DC(to_tensor(results['ego_his_trajs'][None, ...]), stack=True)
             if 'ego_fut_trajs' in results:
-                results['ego_fut_trajs'] = DC(to_tensor(results['ego_fut_trajs'][None, ...]).float(), stack=True)
-            if 'ego_fut_trajs_fix_time' in results:
-                results['ego_fut_trajs_fix_time'] = DC(
-                    to_tensor(results['ego_fut_trajs_fix_time'][None, ...]).float(), stack=True)
-            if 'ego_fut_trajs_fix_dist' in results:
-                results['ego_fut_trajs_fix_dist'] = DC(
-                    to_tensor(results['ego_fut_trajs_fix_dist'][None, ...]).float(), stack=True)
+                results['ego_fut_trajs'] = DC(to_tensor(results['ego_fut_trajs'][None, ...]), stack=True)
             if 'ego_fut_masks' in results:
-                results['ego_fut_masks'] = DC(to_tensor(results['ego_fut_masks'][None, None, ...]).float(), stack=True)
-            if 'ego_fut_masks_fix_time' in results:
-                results['ego_fut_masks_fix_time'] = DC(
-                    to_tensor(results['ego_fut_masks_fix_time'][None, None, ...]).float(), stack=True)
-            if 'ego_fut_masks_fix_dist' in results:
-                results['ego_fut_masks_fix_dist'] = DC(
-                    to_tensor(results['ego_fut_masks_fix_dist'][None, None, ...]).float(), stack=True)
+                results['ego_fut_masks'] = DC(to_tensor(results['ego_fut_masks'][None, None, ...]), stack=True)
             if 'ego_fut_cmd' in results:
-                results['ego_fut_cmd'] = DC(to_tensor(results['ego_fut_cmd'][None, None, ...]).float(), stack=True)
+                results['ego_fut_cmd'] = DC(to_tensor(results['ego_fut_cmd'][None, None, ...]), stack=True)
             if 'ego_lcf_feat' in results:
-                results['ego_lcf_feat'] = DC(to_tensor(results['ego_lcf_feat'][None, None, ...]).float(), stack=True)
+                results['ego_lcf_feat'] = DC(to_tensor(results['ego_lcf_feat'][None, None, ...]), stack=True)
             if 'gt_attr_labels' in results:
-                results['gt_attr_labels'] = DC(to_tensor(results['gt_attr_labels']).float(), cpu_only=False)
+                results['gt_attr_labels'] = DC(to_tensor(results['gt_attr_labels']), cpu_only=False)
         if self.collect_keys is not None:    
             for key in self.collect_keys:
                 if key in ['img_timestamp']:

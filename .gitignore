@@ -166,3 +166,7 @@ data/bench2drive/
 
 # editor / debugger installers
 *.vsix
+# local eval artifacts (videos / HTML reports are generated, not source)
+eval_videos/
+eval_report.html
+work_dirs/

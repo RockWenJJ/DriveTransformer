@@ -393,8 +393,8 @@ class DriveTransformerPreDecoderLayer(BaseModule):
                     **kwargs)
                 attn_index += 1
             elif layer == 'ffn':
-                # SwiGLULayer.forward(x) only takes one arg (residual is inside).
-                query = self.ffns[ffn_index](query)
+                query = self.ffns[ffn_index](
+                    query, None)
                 ffn_index += 1
         return query
 

@@ -27,7 +27,7 @@ from mmcv.core.bbox import get_box_type
 from team_code.planner import RoutePlanner
 from pyquaternion import Quaternion
 
-SAVE_PATH = None #os.environ.get('SAVE_PATH', None)
+SAVE_PATH = os.environ.get('SAVE_PATH', None)
 IS_BENCH2DRIVE = os.environ.get('IS_BENCH2DRIVE', None)
 
 
@@ -98,6 +98,7 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         self._im_transform = T.Compose([T.ToTensor(), T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])])
         self.lat_ref, self.lon_ref = 42.0, 2.0
         self.pid_metadata = {}
+        self.metric_info = {}
         self.prev_control_cache = []
         self.prev_control_list = []
         self.step_time_avg = []
@@ -500,6 +501,7 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         self.pid_metadata['throttle'] = control.throttle
         self.pid_metadata['brake'] = control.brake
         self.pid_metadata['speed'] = float(tick_data['speed'])
+        self.metric_info[self.step] = self.get_metric_info()
         if SAVE_PATH is not None and self.step % 10 == 0:
             self.save(tick_data, ego_traj_fix_time.copy(), ego_traj_fix_dist.copy(), draw_traj=True)
         self.prev_control = control
@@ -560,6 +562,10 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         Image.fromarray(tick_data['bev']).save(self.save_path / 'bev' / ('%04d.png' % frame))
         outfile = open(self.save_path / 'meta' / ('%04d.json' % frame), 'w')
         json.dump(self.pid_metadata, outfile, indent=4)
+        outfile.close()
+
+        outfile = open(self.save_path / 'metric_info.json', 'w')
+        json.dump(self.metric_info, outfile, indent=4)
         outfile.close()
 
     def destroy(self):

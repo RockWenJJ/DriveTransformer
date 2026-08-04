@@ -3,6 +3,7 @@ import torch
 torch.set_float32_matmul_precision("high")
 import torch.nn as nn
 import copy
+import functools
 import os
 import time
 import warnings
@@ -290,6 +291,21 @@ def main():
     model = build_model(cfg.model, train_cfg=cfg.get('train_cfg'), test_cfg=cfg.get('test_cfg'))
     model.init_weights()
     print('Total Number of Learnable Parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad)/1000/1000, "M")
+
+    # BF16 mixed precision: wrap model.forward in autocast(bfloat16).
+    # Unlike fp16, bf16 has the same exponent range as fp32, so no GradScaler
+    # or wrap_fp16_model (which would activate force_fp32 decorators and
+    # disable autocast) is needed. Params stay fp32; activations/grads are
+    # cast per PyTorch AMP policy.
+    bf16_cfg = cfg.get('bf16', None)
+    if bf16_cfg is not None and bf16_cfg.get('enabled', False):
+        _original_forward = model.forward
+        @functools.wraps(_original_forward)
+        def _bf16_forward(*args, **kwargs):
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                return _original_forward(*args, **kwargs)
+        model.forward = _bf16_forward
+        logger.info('BF16 autocast enabled for model.forward')
     if args.fuse_conv_bn:
         model.img_backbone = fuse_conv_bn(model.img_backbone)
     # fp16_cfg = cfg.get('fp16', None)
@@ -312,8 +328,12 @@ def main():
     optimizer = build_optimizer(model, cfg.optimizer)
     #optimizer_config = OptimizerHook(**cfg.optimizer_config)
     fp16_cfg = cfg.get('fp16', None)
+    bf16_cfg = cfg.get('bf16', None)
     if fp16_cfg is not None:
         optimizer_config = Fp16OptimizerHook(**cfg.optimizer_config, **fp16_cfg, distributed=distributed)
+    elif bf16_cfg is not None and bf16_cfg.get('enabled', False):
+        # bf16: no loss scaling, no wrap_fp16_model (autocast handles casting).
+        optimizer_config = OptimizerHook(**cfg.optimizer_config)
     elif distributed and 'type' not in cfg.optimizer_config:
         optimizer_config = OptimizerHook(**cfg.optimizer_config)
     else:

@@ -1649,6 +1649,18 @@ class DriveTransformerlHead(BaseModule):
             f'{self.__class__.__name__} only supports ' \
             f'for gt_bboxes_ignore setting to None.'
 
+        # Loss computation runs in fp32 to avoid dtype mismatches between
+        # bf16 predictions and fp32 ground-truth tensors. Cast all prediction
+        # tensors to fp32 and disable autocast for the rest of this method.
+        def _to_fp32(x):
+            if isinstance(x, torch.Tensor) and x.dtype == torch.bfloat16:
+                return x.float()
+            return x
+        preds_dicts = {k: (_to_fp32(v) if isinstance(v, torch.Tensor)
+                            else (v if not isinstance(v, list)
+                                  else [_to_fp32(e) for e in v]))
+                       for k, v in preds_dicts.items()}
+
         map_gt_vecs_list = copy.deepcopy(map_gt_bboxes_list)
 
         all_cls_scores = preds_dicts['all_cls_scores']

@@ -132,6 +132,14 @@ class AttentionLayer(nn.Module):
             query = self.w_q(query).view(B, N_Q, self.num_heads, -1)
         key = self.w_k(key).view(B, N_KV, self.num_heads, -1)
         value = self.w_v(value).view(B, N_KV, self.num_heads, -1)
+        if attn_bias is not None:
+            # Cast to query dtype without losing stride alignment for sub-multiple-of-8
+            # sequence lengths: re-pad if needed after the dtype cast.
+            if attn_bias.dtype != query.dtype:
+                attn_bias = attn_bias.to(dtype=query.dtype)
+                if attn_bias.shape[-1] % 8 != 0:
+                    attn_bias = torch.cat(
+                        [attn_bias, attn_bias.new_zeros(attn_bias.shape[0], attn_bias.shape[1], attn_bias.shape[2], int(8-attn_bias.shape[3]%8))], dim=-1).contiguous()[:, :, :, :attn_bias.shape[-1]]
         if self.with_cp:
             return self.postnorm(self.proj(cp.checkpoint(xops.memory_efficient_attention, query, key, value, attn_bias, self.attn_drop, ).view(B, N_Q, -1))) + identity
         else:
@@ -393,8 +401,7 @@ class DriveTransformerPreDecoderLayer(BaseModule):
                     **kwargs)
                 attn_index += 1
             elif layer == 'ffn':
-                query = self.ffns[ffn_index](
-                    query, None)
+                query = self.ffns[ffn_index](query)
                 ffn_index += 1
         return query
 

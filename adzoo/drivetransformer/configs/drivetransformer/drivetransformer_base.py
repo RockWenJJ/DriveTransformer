@@ -558,7 +558,7 @@ log_config = dict(
     ])
 fp16 = dict(loss_scale=512.)
 find_unused_parameters = True
-checkpoint_config = dict(interval=3000)
+checkpoint_config = dict(interval=3000, max_keep_ckpts=3)
 
 custom_hooks = [dict(type='CustomSetEpochInfoHook')]
 

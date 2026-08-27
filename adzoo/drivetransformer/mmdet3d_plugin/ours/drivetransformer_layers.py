@@ -495,6 +495,8 @@ class DriveTransformerDecoderLayer(BaseModule):
                  agent_num_propagated=50,
                  map_num_propagated=50,
                  map_pts_per_vec=4,
+                 isolate_map_task_attn=False,
+                 cross_task_temporal_attn=False,
                  **kwargs):
 
         deprecated_args = dict(
@@ -519,6 +521,13 @@ class DriveTransformerDecoderLayer(BaseModule):
         self.map_pts_per_vec = map_pts_per_vec
         self.agent_num_propagated = agent_num_propagated
         self.map_num_propagated = map_num_propagated
+        # experiment switches:
+        # isolate_map_task_attn: in task self attention, map queries only attend to map
+        #   queries (agent / ego queries still attend to all queries)
+        # cross_task_temporal_attn: in temporal cross attention, each task query attends
+        #   to the temporal memories of all tasks instead of only its own
+        self.isolate_map_task_attn = isolate_map_task_attn
+        self.cross_task_temporal_attn = cross_task_temporal_attn
 
         assert set(operation_order) & {
             'task_self_attn', 'norm', 'ffn', 'temporal_cross_attn', 'sensor_cross_attn'} == \
@@ -624,6 +633,40 @@ class DriveTransformerDecoderLayer(BaseModule):
         out_queries = []
         # attention masks
         temp_attn_masks = ~(temp_attn_masks.bool()).squeeze(-1)
+        if self.cross_task_temporal_attn:
+            # each task query attends to the temporal memories of ALL tasks
+            # (agent + map + ego), so task queries can gather information from
+            # each other's history. A single shared zero token is prepended so
+            # attention is still valid when all memory frames are masked out.
+            kv = torch.cat(
+                [torch.zeros((temp_memories[0].shape[0], 1, temp_memories[0].shape[2])).to(temp_memories[0].device)]
+                + temp_memories, dim=1)
+            kv_pos = torch.cat(
+                [torch.zeros((temp_poses[0].shape[0], 1, temp_poses[0].shape[2])).to(temp_poses[0].device)]
+                + temp_poses, dim=1)
+            # column validity for the unified memory: [B, L*(Na+Nm)+L], True = invalid
+            invalid = torch.cat([
+                temp_attn_masks.repeat_interleave(repeats=self.agent_num_propagated, dim=-1),
+                temp_attn_masks.repeat_interleave(repeats=self.map_num_propagated, dim=-1),
+                temp_attn_masks,
+            ], dim=-1)
+            for i in range(3):
+                unified_attn_mask = torch.cat([
+                    torch.zeros((queries[i].shape[0], queries[i].shape[1], 1)).bool().to(queries[i].device),
+                    invalid.unsqueeze(1).expand(-1, queries[i].shape[1], -1),
+                ], dim=-1)
+                out_queries.append(
+                    self.temporal_cross_attention_layers[i](
+                        queries[i],
+                        kv,
+                        kv,
+                        None,
+                        query_pos=poses[i],
+                        key_pos=kv_pos,
+                        attn_mask=unified_attn_mask
+                    )
+                )
+            return torch.cat(out_queries, dim=1)
         temp_attn_masks = [
             torch.cat([torch.zeros((agent_query.shape[0], agent_query.shape[1], 1)).bool().to(agent_query.device), temp_attn_masks.unsqueeze(1).expand(-1, agent_query.shape[1], -1).repeat_interleave(repeats=self.agent_num_propagated, dim=-1)], dim=-1),
             torch.cat([torch.zeros((map_query.shape[0], map_query.shape[1], 1)).bool().to(agent_query.device), temp_attn_masks.unsqueeze(1).expand(-1, map_query.shape[1], -1).repeat_interleave(repeats=self.map_num_propagated, dim=-1)], dim=-1),
@@ -692,15 +735,43 @@ class DriveTransformerDecoderLayer(BaseModule):
         pos = torch.cat([agent_pos_embed, map_ins_pos_embed, ego_pos_embed], dim=1) # [B, N_agent_query+N_map_query+N_ego_mode, D] 
         for layer in self.operation_order:
             if layer == 'task_self_attn': # task self attention
-                query = self.task_self_attentions[task_self_attn_index](
-                    query,
-                    query,
-                    query,
-                    None,
-                    query_pos=pos,
-                    key_pos=pos,
-                    attn_mask=attn_masks[attn_index],
-                    **kwargs)
+                if self.isolate_map_task_attn:
+                    # map queries only attend to map queries, while agent / ego
+                    # queries still attend to all queries. Two calls of the SAME
+                    # attention module are used instead of a dense [B, N, N]
+                    # attention mask (mathematically equivalent, much cheaper).
+                    attn_module = self.task_self_attentions[task_self_attn_index]
+                    agent_ego_query = torch.cat([agent_query, ego_query], dim=1)
+                    agent_ego_pos = torch.cat([agent_pos_embed, ego_pos_embed], dim=1)
+                    agent_ego_query = attn_module(
+                        agent_ego_query,
+                        query,
+                        query,
+                        None,
+                        query_pos=agent_ego_pos,
+                        key_pos=pos,
+                        **kwargs)
+                    map_only_query = attn_module(
+                        map_query,
+                        map_query,
+                        map_query,
+                        None,
+                        query_pos=map_ins_pos_embed,
+                        key_pos=map_ins_pos_embed,
+                        **kwargs)
+                    query = torch.cat(
+                        [agent_ego_query[:, :agent_query_num], map_only_query, agent_ego_query[:, agent_query_num:]],
+                        dim=1)
+                else:
+                    query = self.task_self_attentions[task_self_attn_index](
+                        query,
+                        query,
+                        query,
+                        None,
+                        query_pos=pos,
+                        key_pos=pos,
+                        attn_mask=attn_masks[attn_index],
+                        **kwargs)
                 task_self_attn_index += 1
                 attn_index += 1
             

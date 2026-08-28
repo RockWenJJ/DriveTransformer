@@ -25,7 +25,8 @@ Usage (from repo root):
 Add --verify to print a numeric audit of the conventions below instead of
 (before) rendering.
 
-Coordinate / box conventions -- all of these are checked by --verify
+Coordinate / box conventions -- all of these are checked by --verify, and the
+geometry itself lives in dt_viz_common so the four viewers cannot drift apart
   * BEV data frame: +x = right, +y = forward.
   * A box row is (x, y, z, x_size, y_size, z_size, yaw, vx, vy) -- the same
     layout the head documents at drivetransformer_head.py:1691. mmdet3d rotates
@@ -44,172 +45,29 @@ Coordinate / box conventions -- all of these are checked by --verify
     even if a checkpoint ships non-grid reference points.
 """
 import argparse
-import importlib
 import os
+import sys
 
 import numpy as np
-import torch
 
-torch.set_float32_matmul_precision("high")
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import ConnectionPatch, Patch, Polygon
 
-from mmcv import Config
-from mmcv.datasets import build_dataset
-from mmcv.models import build_model
-from mmcv.parallel import DataContainer
-from mmcv.parallel.collate import collate
-from mmcv.utils import wrap_fp16_model
-
-# forward_test chokes on bare bool/int entries, so only these are handed over.
-INPUT_KEYS = [
-    "img", "ego_his_trajs", "ego_lcf_feat", "ego_fut_cmd",
-    "lidar2img", "cam_intrinsic", "timestamp", "ego_pose", "ego_pose_inv", "pad_shape",
-]
-
-MAP_STYLE = {  # map class -> (colour, linestyle, linewidth); 'Center' is skipped
-    "Broken": ("#2f2f2f", "-", 1.9),
-    "Solid": ("#e07b00", "-", 1.2),
-    "SolidSolid": ("#e07b00", "--", 1.2),
-    "TrafficLight": ("#c9184a", "-", 1.2),
-    "StopSign": ("#7b2cbf", "-", 1.2),
-}
-MAP_SKIP = {"Center"}
-EGO_SIZE = (2.1, 4.7)  # (x_size, y_size) fallback when ego_lcf_feat looks odd
-DOT_SIZE = 1.5         # agents whose footprint is below this are drawn as dots
-
-
-# --------------------------------------------------------------------------- #
-# geometry
-# --------------------------------------------------------------------------- #
-def bev_poly(cx, cy, size_x, size_y, yaw):
-    """Footprint (4x2, counter-clockwise) of a box row in the BEV frame.
-
-    mmdet3d applies R(-yaw) to the box local axes, hence the local +x axis
-    (length ``size_x``) points along -yaw and the local +y axis (``size_y``)
-    along pi/2 - yaw.  Kept in one place so GT and predictions cannot drift.
-    """
-    ux = np.array([np.cos(yaw), -np.sin(yaw)]) * (size_x / 2.0)
-    uy = np.array([np.sin(yaw), np.cos(yaw)]) * (size_y / 2.0)
-    c = np.array([cx, cy], dtype=float)
-    return np.stack([c - ux - uy, c + ux - uy, c + ux + uy, c - ux + uy])
-
-
-def heading_vec(yaw):
-    """Unit vector the agent drives towards: opposite the local +y axis."""
-    return np.array([-np.sin(yaw), -np.cos(yaw)])
-
-
-def heading_angle(yaw):
-    return np.arctan2(-np.cos(yaw), -np.sin(yaw))
-
-
-def box_corners_3d(row):
-    """8x3 corners of (x, y, z_centre, size_x, size_y, size_z, yaw, ...)."""
-    cx, cy, cz, sx, sy, sz, yaw = row[:7]
-    base = bev_poly(cx, cy, sx, sy, yaw)
-    bottom = np.concatenate([base, np.full((4, 1), cz - sz / 2.0)], axis=1)
-    top = np.concatenate([base, np.full((4, 1), cz + sz / 2.0)], axis=1)
-    return np.concatenate([bottom, top], axis=0)
-
-
-BOX_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0),
-             (4, 5), (5, 6), (6, 7), (7, 4),
-             (0, 4), (1, 5), (2, 6), (3, 7)]
-
-
-def project(pts3d, lidar2img, width, height, min_depth=0.5):
-    """Project 3D points to one camera; None if behind or fully off-frame."""
-    hom = np.concatenate([pts3d, np.ones((len(pts3d), 1))], axis=1)
-    cam = hom @ np.asarray(lidar2img).T
-    if (cam[:, 2] < min_depth).any():
-        return None
-    uv = cam[:, :2] / cam[:, 2:3]
-    if (uv[:, 0].max() < 0 or uv[:, 0].min() > width
-            or uv[:, 1].max() < 0 or uv[:, 1].min() > height):
-        return None
-    return uv
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dt_viz_common import (  # noqa: E402
+    BOX_EDGES, DOT_SIZE, MAP_SKIP, MAP_STYLE, add_common_args, bev_poly,
+    box_corners_3d, build, cameras_of, decode_box_code, ego_size, frame_sequence,
+    gt_of, heading_angle, heading_vec, map_of, pick_frames, project, run_frame,
+    verify_indices, wrap_pi,
+)
+from mmcv.datasets import build_dataset  # noqa: E402
 
 
 def decode_pred(code):
-    """(x, y, z, size_x, size_y, size_z, yaw) from a normalize_bbox 10-code."""
-    return np.array([
-        code[0], code[1], code[4],
-        np.exp(np.clip(code[2], -3.0, 3.0)),
-        np.exp(np.clip(code[3], -3.0, 3.0)),
-        np.exp(np.clip(code[5], -3.0, 3.0)),
-        np.arctan2(code[6], code[7]),
-    ])
-
-
-def wrap_pi(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
-
-
-# --------------------------------------------------------------------------- #
-# model / data plumbing
-# --------------------------------------------------------------------------- #
-def to_device(obj, device):
-    if torch.is_tensor(obj):
-        obj = obj.to(device)
-        return obj.float() if obj.dtype == torch.float64 else obj
-    if isinstance(obj, list):
-        return [to_device(o, device) for o in obj]
-    if isinstance(obj, tuple):
-        return tuple(to_device(o, device) for o in obj)
-    if isinstance(obj, dict):
-        return {k: to_device(v, device) for k, v in obj.items()}
-    return obj
-
-
-def build(cfg_path, ckpt_path):
-    cfg = Config.fromfile(cfg_path)
-    if getattr(cfg, "plugin", False):
-        importlib.import_module(os.path.dirname(cfg.plugin_dir).replace("/", "."))
-    model = build_model(cfg.model, train_cfg=cfg.get("train_cfg"), test_cfg=cfg.get("test_cfg"))
-    sd = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-    new_state = {k.replace("model.", "").replace("._orig_mod", ""): v for k, v in sd.items()}
-    missing, unexpected = model.load_state_dict(new_state, strict=False)
-    print(f"loaded ckpt: {len(new_state)} keys, missing={len(missing)}, unexpected={len(unexpected)}")
-    if missing:
-        print("  missing e.g.:", list(missing)[:5])
-    if unexpected:
-        print("  unexpected e.g.:", list(unexpected)[:5])
-    wrap_fp16_model(model)
-    model.cuda().eval()
-    return cfg, model
-
-
-def run_frame(model, head, sample, token, stash_gt=None):
-    """One forward pass; returns the raw head outputs."""
-    meta = dict(sample["img_metas"].data)
-    meta["scene_token"] = token
-    inp = {k: sample[k] for k in INPUT_KEYS if k in sample}
-    inp["img_metas"] = DataContainer(meta, cpu_only=True)
-    batch = to_device(collate([inp], samples_per_gpu=1), "cuda")
-
-    captured = {}
-    orig_forward = head.forward
-
-    def wrapped(*a, _og=orig_forward, **k):
-        out = _og(*a, **k)
-        captured["outs"] = out
-        return out
-
-    head.forward = wrapped
-    try:
-        with torch.no_grad():
-            model(batch, return_loss=False, rescale=True)
-    finally:
-        head.forward = orig_forward
-    outs = captured["outs"]
-    if stash_gt is not None:
-        outs["_viz_gt_bboxes"], outs["_viz_gt_labels"] = stash_gt
-    return outs
+    """(x, y, z, size_x, size_y, size_z, yaw) of a 10-code, velocity dropped."""
+    return decode_box_code(code)[:7]
 
 
 def match_900(head, outs):
@@ -227,69 +85,6 @@ def match_900(head, outs):
             sampling_result.pos_assigned_gt_inds.detach().cpu().numpy(),
             head.agent_reference_points.weight[..., :2].detach().cpu().float().numpy(),
             bbox_preds.detach().cpu().numpy())
-
-
-def gt_of(sample):
-    boxes = sample["gt_bboxes_3d"].data
-    rows = torch.cat((boxes.gravity_center, boxes.tensor[:, 3:]), dim=1).float()
-    return boxes, rows, sample["gt_labels_3d"].data.long()
-
-
-def cameras_of(sample, cfg):
-    meta = dict(sample["img_metas"].data)
-    img = sample["img"].data
-    if not torch.is_tensor(img):
-        return None, [], None
-    ncfg = meta.get("img_norm_cfg") or cfg.img_norm_cfg
-    mean, std = np.array(ncfg["mean"]), np.array(ncfg["std"])
-    imgs = [np.clip(x * std + mean, 0, 255).astype(np.uint8)
-            for x in img.numpy().transpose(0, 2, 3, 1)]
-    names = [f.split("/")[-2] for f in meta.get("filename", [])]
-    lidar2img = np.asarray(sample["lidar2img"].data, dtype=np.float64)
-    return imgs, names, lidar2img
-
-
-def map_of(sample, index):
-    try:
-        md = sample["map_gt_bboxes_3d"].data
-        return md.fixed_num_sampled_points_torch.numpy(), sample["map_gt_labels_3d"].data.numpy()
-    except Exception as exc:  # noqa: BLE001 - map GT is optional for the plot
-        print(f"[{index}] map GT unavailable ({exc}), lane lines skipped")
-        return None, None
-
-
-def ego_size(sample):
-    """(x_size, y_size) of ego from ego_lcf_feat = (vx,vy,ax,ay,w,length,width,vel,steer)."""
-    try:
-        feat = np.asarray(sample["ego_lcf_feat"].data).ravel()
-        length, width = float(feat[5]), float(feat[6])
-        if 1.0 < length < 20.0 and 0.5 < width < 5.0:
-            return width, length
-    except Exception:  # noqa: BLE001 - fall back to the nominal size
-        pass
-    return EGO_SIZE
-
-
-def _prev_exists(sample):
-    v = sample["prev_exists"]
-    v = v.data if hasattr(v, "data") else v
-    return bool(np.asarray(v).ravel()[0])
-
-
-def frame_sequence(ds, index, warmup):
-    """The target sample preceded by up to `warmup` contiguous same-scene ones."""
-    target = ds[index]
-    token = dict(target["img_metas"].data)["scene_token"]
-    seq, j = [], index - 1
-    while len(seq) < warmup and j >= 0:
-        prev = ds[j]
-        if dict(prev["img_metas"].data)["scene_token"] != token:
-            break
-        seq.append(prev)
-        if not _prev_exists(prev):
-            break
-        j -= 1
-    return list(reversed(seq)) + [target], token
 
 
 # --------------------------------------------------------------------------- #
@@ -484,10 +279,8 @@ def verify(cfg, model, ds, args):
     rnd_dxy, rnd_dyaw = [], []
     rng = np.random.default_rng(0)
     done = 0
-    idx = 0
-    step = max(1, args.stride // 4)
-    while done < args.verify_frames and idx < len(ds):
-        cur, idx = idx, idx + step
+    for cur in verify_indices(ds, args.verify_frames):
+        cur = int(cur)
         sample = ds[cur]
         boxes, rows, labels = gt_of(sample)
         if len(rows) < 2:
@@ -535,8 +328,8 @@ def verify(cfg, model, ds, args):
 
     # yaw convention vs. the annotated velocities
     yaw, angv = [], []
-    for i in range(0, min(len(ds), 3000), 61):
-        _, rows, _ = gt_of(ds[i])
+    for i in verify_indices(ds, 200):
+        _, rows, _ = gt_of(ds[int(i)])
         r = rows.numpy()
         if len(r) == 0:
             continue
@@ -554,21 +347,7 @@ def verify(cfg, model, ds, args):
 # --------------------------------------------------------------------------- #
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", default="adzoo/drivetransformer/configs/drivetransformer/drivetransformer_large.py")
-    p.add_argument("--ckpt", default="ckpts/drivetransformer_large.pth")
-    p.add_argument("--out-dir", default="ol_eval_results/query_gt_viz")
-    p.add_argument("--num", type=int, default=4, help="number of frames to render")
-    p.add_argument("--frames", type=int, nargs="*", default=None,
-                   help="explicit dataset indices to render (overrides the scan)")
-    p.add_argument("--min-gt", type=int, default=5)
-    p.add_argument("--max-gt", type=int, default=40)
-    p.add_argument("--scan", type=int, default=400, help="dataset samples to scan for candidates")
-    p.add_argument("--stride", type=int, default=100, help="dataset-index jump between rendered frames")
-    p.add_argument("--warmup", type=int, default=4,
-                   help="preceding same-scene frames replayed to fill the temporal memory")
-    p.add_argument("--no-cam-boxes", action="store_true", help="do not project boxes onto the cameras")
-    p.add_argument("--verify", action="store_true", help="run the numeric audit first")
-    p.add_argument("--verify-frames", type=int, default=12)
+    add_common_args(p, "ol_eval_results/query_gt_viz")
     args = p.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -583,22 +362,8 @@ def main():
     if args.verify:
         verify(cfg, model, ds, args)
 
-    if args.frames:
-        candidates = list(args.frames)
-    else:
-        candidates = []
-        i = 0
-        while i < min(args.scan, len(ds)) and len(candidates) < args.num:
-            boxes = ds[i]["gt_bboxes_3d"].data
-            n = len(boxes.tensor) if boxes is not None else 0
-            if args.min_gt <= n <= args.max_gt:
-                candidates.append(i)
-                i += args.stride  # jump ahead for scene variety
-            else:
-                i += 1
-
     rendered = 0
-    for i in candidates:
+    for i in pick_frames(ds, args):
         seq, token = frame_sequence(ds, i, args.warmup)
         sample = seq[-1]
         boxes, rows, labels = gt_of(sample)
@@ -612,7 +377,7 @@ def main():
                              stash_gt=gt if k == len(seq) - 1 else None)
         pos_inds, pos_gt_inds, query_ref, query_code = match_900(head, outs)
 
-        map_pts, map_labels = map_of(sample, i)
+        map_pts, map_labels = map_of(sample)
         cams, cam_names, lidar2img = cameras_of(sample, cfg)
         out_path = os.path.join(args.out_dir, f"frame_{i:05d}.png")
         title = (f"{tag}   agent query <-> GT matching   frame {i}   "

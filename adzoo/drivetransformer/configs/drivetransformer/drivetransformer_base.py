@@ -554,7 +554,10 @@ log_config = dict(
     interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
-        dict(type='TensorboardLoggerHook')
+        dict(type='TensorboardLoggerHook'),
+        # run name comes from $WANDB_NAME at launch; wandb generates one if unset
+        dict(type='WandbLoggerHook',
+             init_kwargs=dict(project='DriveTransformer'))
     ])
 fp16 = dict(loss_scale=512.)
 find_unused_parameters = True

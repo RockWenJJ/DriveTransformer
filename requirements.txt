@@ -2,6 +2,7 @@ cython
 numba==0.48.0 # In order to speed up
 addict
 packaging
+safetensors>=0.4.3
 Pillow
 matplotlib
 regex;sys_platform=='win32'

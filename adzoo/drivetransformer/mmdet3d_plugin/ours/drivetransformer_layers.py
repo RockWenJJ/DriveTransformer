@@ -87,7 +87,8 @@ class AttentionLayer(nn.Module):
             nn.init.constant_(m.bias, 0)
 
     @auto_fp16()
-    def forward(self, query, key, value, identity=None, query_pos=None, key_pos=None, attn_mask=None, key_padding_mask=None):
+    def forward(self, query, key, value, identity=None, query_pos=None, key_pos=None,
+                attn_mask=None, key_padding_mask=None, head_gate=None):
         if key is None:
             key = query
         if value is None:
@@ -133,9 +134,21 @@ class AttentionLayer(nn.Module):
         key = self.w_k(key).view(B, N_KV, self.num_heads, -1)
         value = self.w_v(value).view(B, N_KV, self.num_heads, -1)
         if self.with_cp:
-            return self.postnorm(self.proj(cp.checkpoint(xops.memory_efficient_attention, query, key, value, attn_bias, self.attn_drop, ).view(B, N_Q, -1))) + identity
+            attn_out = cp.checkpoint(
+                xops.memory_efficient_attention,
+                query, key, value, attn_bias, self.attn_drop)
         else:
-            return self.postnorm(self.proj(xops.memory_efficient_attention(query, key, value, attn_bias=attn_bias, p=self.attn_drop,).view(B, N_Q, -1))) + identity
+            attn_out = xops.memory_efficient_attention(
+                query, key, value, attn_bias=attn_bias, p=self.attn_drop)
+        if head_gate is not None:
+            assert head_gate.numel() == self.num_heads
+            gate = head_gate.to(device=attn_out.device, dtype=attn_out.dtype)
+            attn_out = attn_out * gate.view(1, 1, self.num_heads, 1)
+            projected = F.linear(
+                attn_out.reshape(B, N_Q, -1), self.proj.weight)
+        else:
+            projected = self.proj(attn_out.reshape(B, N_Q, -1))
+        return self.postnorm(projected) + identity
     
 
 @FEEDFORWARD_NETWORK.register_module()
@@ -497,6 +510,7 @@ class DriveTransformerDecoderLayer(BaseModule):
                  map_pts_per_vec=4,
                  isolate_map_task_attn=False,
                  cross_task_temporal_attn=False,
+                 directed_gated_cross_task_temporal_attn=False,
                  **kwargs):
 
         deprecated_args = dict(
@@ -521,13 +535,15 @@ class DriveTransformerDecoderLayer(BaseModule):
         self.map_pts_per_vec = map_pts_per_vec
         self.agent_num_propagated = agent_num_propagated
         self.map_num_propagated = map_num_propagated
-        # experiment switches:
-        # isolate_map_task_attn: in task self attention, map queries only attend to map
-        #   queries (agent / ego queries still attend to all queries)
-        # cross_task_temporal_attn: in temporal cross attention, each task query attends
-        #   to the temporal memories of all tasks instead of only its own
         self.isolate_map_task_attn = isolate_map_task_attn
         self.cross_task_temporal_attn = cross_task_temporal_attn
+        self.directed_gated_cross_task_temporal_attn = \
+            directed_gated_cross_task_temporal_attn
+        if (self.cross_task_temporal_attn and
+                self.directed_gated_cross_task_temporal_attn):
+            raise ValueError(
+                'cross_task_temporal_attn and '
+                'directed_gated_cross_task_temporal_attn are mutually exclusive')
 
         assert set(operation_order) & {
             'task_self_attn', 'norm', 'ffn', 'temporal_cross_attn', 'sensor_cross_attn'} == \
@@ -553,6 +569,7 @@ class DriveTransformerDecoderLayer(BaseModule):
         self.task_self_attentions = ModuleList()
         self.temporal_cross_attention_layers = ModuleList()
         self.sensor_cross_attentions = ModuleList()
+        self.directed_cross_temporal_attention_layers = ModuleList()
 
         index = 0
         for operation_name in operation_order:
@@ -566,6 +583,13 @@ class DriveTransformerDecoderLayer(BaseModule):
                     attention = build_attention(attn_cfgs[index])
                     attention.operation_name = operation_name
                     self.temporal_cross_attention_layers.append(attention)
+                if self.directed_gated_cross_task_temporal_attn:
+                    # Separate foreign-memory projections keep the baseline
+                    # temporal K/V projections untouched.
+                    for _ in range(2):
+                        attention = build_attention(copy.deepcopy(attn_cfgs[index]))
+                        attention.operation_name = 'directed_temporal_cross_attn'
+                        self.directed_cross_temporal_attention_layers.append(attention)
                 index += 1
             if operation_name == 'task_self_attn':
                 if 'batch_first' in attn_cfgs[index]:
@@ -586,6 +610,19 @@ class DriveTransformerDecoderLayer(BaseModule):
                 self.sensor_cross_attentions.append(attention)
                 index += 1
         self.embed_dims = self.task_self_attentions[0].embed_dims
+        if self.directed_gated_cross_task_temporal_attn:
+            assert len(self.directed_cross_temporal_attention_layers) == 2
+            num_heads = self.directed_cross_temporal_attention_layers[0].num_heads
+            # Edges: map->agent, agent->ego, map->ego. tanh(0)=0 makes
+            # the initialized layer exactly equivalent to the baseline.
+            self.directed_cross_temporal_gates = nn.Parameter(
+                torch.zeros(3, num_heads))
+            self.directed_cross_source_embeddings = nn.Parameter(
+                torch.empty(2, self.embed_dims))
+            nn.init.normal_(self.directed_cross_source_embeddings, std=0.02)
+        else:
+            self.directed_cross_temporal_gates = None
+            self.directed_cross_source_embeddings = None
         self.cross_w_q = nn.ModuleList(
                 [nn.Sequential(nn.LayerNorm(self.embed_dims), nn.Linear(self.embed_dims, self.embed_dims)) for _ in range(3)]
             )
@@ -630,9 +667,71 @@ class DriveTransformerDecoderLayer(BaseModule):
         poses = [agent_pos, map_pos, ego_pos]
         temp_memories = [agent_temp_memory, map_temp_memory, ego_temp_memory]
         temp_poses = [agent_temp_pos, map_temp_pos, ego_temp_pos]
-        out_queries = []
-        # attention masks
-        temp_attn_masks = ~(temp_attn_masks.bool()).squeeze(-1)
+        invalid_frames = ~(temp_attn_masks.bool()).squeeze(-1)
+
+        def source_mask(target_query, repeats):
+            invalid = invalid_frames
+            if repeats is not None:
+                invalid = invalid.repeat_interleave(repeats=repeats, dim=-1)
+            invalid = invalid.unsqueeze(1).expand(
+                -1, target_query.shape[1], -1)
+            null_valid = torch.zeros(
+                (target_query.shape[0], target_query.shape[1], 1),
+                dtype=torch.bool, device=target_query.device)
+            return torch.cat([null_valid, invalid], dim=-1)
+
+        own_attn_masks = [
+            source_mask(agent_query, self.agent_num_propagated),
+            source_mask(map_query, self.map_num_propagated),
+            source_mask(ego_query, None),
+        ]
+
+        def with_null_token(x):
+            return torch.cat([x.new_zeros(x.shape[0], 1, x.shape[2]), x], dim=1)
+
+        if self.directed_gated_cross_task_temporal_attn:
+            own_queries = []
+            for i in range(3):
+                own_queries.append(
+                    self.temporal_cross_attention_layers[i](
+                        queries[i], with_null_token(temp_memories[i]),
+                        with_null_token(temp_memories[i]), None,
+                        query_pos=poses[i],
+                        key_pos=with_null_token(temp_poses[i]),
+                        attn_mask=own_attn_masks[i]))
+
+            source_pos = [
+                agent_temp_pos + self.directed_cross_source_embeddings[0].view(1, 1, -1),
+                map_temp_pos + self.directed_cross_source_embeddings[1].view(1, 1, -1),
+            ]
+            gates = torch.tanh(self.directed_cross_temporal_gates)
+            zero_agent = torch.zeros_like(own_queries[0])
+            zero_ego = torch.zeros_like(own_queries[2])
+
+            map_to_agent = self.directed_cross_temporal_attention_layers[0](
+                own_queries[0], with_null_token(map_temp_memory),
+                with_null_token(map_temp_memory), zero_agent,
+                query_pos=poses[0], key_pos=with_null_token(source_pos[1]),
+                attn_mask=source_mask(own_queries[0], self.map_num_propagated),
+                head_gate=gates[0])
+            agent_to_ego = self.directed_cross_temporal_attention_layers[1](
+                own_queries[2], with_null_token(agent_temp_memory),
+                with_null_token(agent_temp_memory), zero_ego,
+                query_pos=poses[2], key_pos=with_null_token(source_pos[0]),
+                attn_mask=source_mask(own_queries[2], self.agent_num_propagated),
+                head_gate=gates[1])
+            map_to_ego = self.directed_cross_temporal_attention_layers[1](
+                own_queries[2], with_null_token(map_temp_memory),
+                with_null_token(map_temp_memory), zero_ego,
+                query_pos=poses[2], key_pos=with_null_token(source_pos[1]),
+                attn_mask=source_mask(own_queries[2], self.map_num_propagated),
+                head_gate=gates[2])
+            return torch.cat([
+                own_queries[0] + map_to_agent,
+                own_queries[1],
+                own_queries[2] + agent_to_ego + map_to_ego,
+            ], dim=1)
+
         if self.cross_task_temporal_attn:
             # each task query attends to the temporal memories of ALL tasks
             # (agent + map + ego), so task queries can gather information from
@@ -646,10 +745,11 @@ class DriveTransformerDecoderLayer(BaseModule):
                 + temp_poses, dim=1)
             # column validity for the unified memory: [B, L*(Na+Nm)+L], True = invalid
             invalid = torch.cat([
-                temp_attn_masks.repeat_interleave(repeats=self.agent_num_propagated, dim=-1),
-                temp_attn_masks.repeat_interleave(repeats=self.map_num_propagated, dim=-1),
-                temp_attn_masks,
+                invalid_frames.repeat_interleave(repeats=self.agent_num_propagated, dim=-1),
+                invalid_frames.repeat_interleave(repeats=self.map_num_propagated, dim=-1),
+                invalid_frames,
             ], dim=-1)
+            out_queries = []
             for i in range(3):
                 unified_attn_mask = torch.cat([
                     torch.zeros((queries[i].shape[0], queries[i].shape[1], 1)).bool().to(queries[i].device),
@@ -667,22 +767,17 @@ class DriveTransformerDecoderLayer(BaseModule):
                     )
                 )
             return torch.cat(out_queries, dim=1)
-        temp_attn_masks = [
-            torch.cat([torch.zeros((agent_query.shape[0], agent_query.shape[1], 1)).bool().to(agent_query.device), temp_attn_masks.unsqueeze(1).expand(-1, agent_query.shape[1], -1).repeat_interleave(repeats=self.agent_num_propagated, dim=-1)], dim=-1),
-            torch.cat([torch.zeros((map_query.shape[0], map_query.shape[1], 1)).bool().to(agent_query.device), temp_attn_masks.unsqueeze(1).expand(-1, map_query.shape[1], -1).repeat_interleave(repeats=self.map_num_propagated, dim=-1)], dim=-1),
-            torch.cat([torch.zeros((ego_query.shape[0], ego_query.shape[1], 1)).bool().to(agent_query.device),temp_attn_masks.unsqueeze(1).expand(-1, ego_query.shape[1], -1)], dim=-1)
-        ]
+        out_queries = []
         # temporal attention for each query 
         for i in range(3):
             out_queries.append(
                 self.temporal_cross_attention_layers[i](
-                queries[i],
-                torch.cat([torch.zeros((temp_memories[i].shape[0], 1, temp_memories[i].shape[2])).to(temp_memories[i].device), temp_memories[i]], dim=1), 
-                torch.cat([torch.zeros((temp_memories[i].shape[0], 1, temp_memories[i].shape[2])).to(temp_memories[i].device), temp_memories[i]], dim=1),
+                queries[i], with_null_token(temp_memories[i]),
+                with_null_token(temp_memories[i]),
                 None, 
                 query_pos=poses[i],
-                key_pos=torch.cat([torch.zeros((temp_poses[i].shape[0], 1, temp_poses[i].shape[2])).to(temp_poses[i].device), temp_poses[i]], dim=1), 
-                attn_mask=temp_attn_masks[i]
+                key_pos=with_null_token(temp_poses[i]),
+                attn_mask=own_attn_masks[i]
                 )
             )
         return torch.cat(out_queries, dim=1)
@@ -1055,4 +1150,3 @@ class DriveTransformerPreDecoder(TransformerLayerSequence):
         if self.return_intermediate and len(self.layers) > 1:
             return torch.stack(intermediate)
         return query
-    

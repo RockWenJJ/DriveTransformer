@@ -1,3 +1,4 @@
+import contextlib
 import math
 import os
 
@@ -197,6 +198,7 @@ class FrozenDINOv3ViT(BaseModule):
         out_channels=512,
         forward_chunk_size=12,
         amp_dtype="bfloat16",
+        freeze=True,
         init_cfg=None,
     ):
         super().__init__(init_cfg=init_cfg)
@@ -213,6 +215,7 @@ class FrozenDINOv3ViT(BaseModule):
 
         self.variant = variant
         self.checkpoint = os.path.abspath(os.path.expanduser(checkpoint))
+        self._checkpoint_arg = checkpoint
         self.forward_chunk_size = forward_chunk_size
         self.amp_dtype = amp_dtype
         variant_cfg = DINOV3_VARIANTS[variant]
@@ -234,7 +237,12 @@ class FrozenDINOv3ViT(BaseModule):
         )
         self._checkpoint_loaded = False
         self.fp16_enabled = False
-        self._freeze_dinov3()
+        self.freeze_trunk = freeze
+        # Load pretrained weights at CONSTRUCTION time: eval-side builders
+        # (CARLA agent, log-replay scripts) do build -> load trained ckpt ->
+        # forward without ever calling init_weights(), so the pretrained trunk
+        # must already be in place before load_checkpoint() overwrites it.
+        self._load_pretrained()
 
     def _freeze_dinov3(self):
         self.dinov3.eval()
@@ -244,11 +252,25 @@ class FrozenDINOv3ViT(BaseModule):
     def init_weights(self):
         if self._checkpoint_loaded:
             return
-        if not os.path.isfile(self.checkpoint):
-            raise FileNotFoundError(
-                "DINOv3 checkpoint does not exist: {}".format(self.checkpoint)
+        self._load_pretrained()
+
+    def _load_pretrained(self):
+        # Resolve the safetensors path against the repo root as a fallback, so
+        # the CARLA-side agent (cwd = Bench2Drive/leaderboard) can build the
+        # model from a config that uses a repo-relative "./ckpts/..." path.
+        ckpt = self.checkpoint
+        if not os.path.isfile(ckpt):
+            repo_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
             )
-        state_dict = load_file(self.checkpoint, device="cpu")
+            alt = os.path.join(repo_root, self._checkpoint_arg)
+            if os.path.isfile(alt):
+                ckpt = alt
+            else:
+                raise FileNotFoundError(
+                    "DINOv3 checkpoint does not exist: {} (also tried {})".format(self.checkpoint, alt)
+                )
+        state_dict = load_file(ckpt, device="cpu")
         self.dinov3.load_state_dict(state_dict, strict=True)
         for module in self.adapter.modules():
             if isinstance(module, nn.Conv2d):
@@ -256,18 +278,23 @@ class FrozenDINOv3ViT(BaseModule):
             elif isinstance(module, nn.GroupNorm):
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
-        self._freeze_dinov3()
+        if self.freeze_trunk:
+            self._freeze_dinov3()
         self._checkpoint_loaded = True
         self._is_init = True
 
     def train(self, mode=True):
         super().train(mode)
-        self._freeze_dinov3()
+        if self.freeze_trunk:
+            self._freeze_dinov3()
         return self
 
     def forward(self, pixel_values):
         if not self._checkpoint_loaded:
-            raise RuntimeError("init_weights() must be called before forward()")
+            # Some eval-side builders never call init_weights(); load lazily
+            # instead of raising. Loading a trained checkpoint afterwards
+            # still overwrites the pretrained weights as expected.
+            self._load_pretrained()
         height, width = pixel_values.shape[-2:]
         if height % 16 or width % 16:
             raise ValueError(
@@ -285,7 +312,8 @@ class FrozenDINOv3ViT(BaseModule):
         run_dtype = getattr(torch, self.amp_dtype) if autocast else out_dtype
 
         patch_features = []
-        with torch.no_grad():
+        trunk_ctx = torch.no_grad() if self.freeze_trunk else contextlib.nullcontext()
+        with trunk_ctx:
             for start in range(0, pixel_values.shape[0], self.forward_chunk_size):
                 chunk = pixel_values[start : start + self.forward_chunk_size]
                 with torch.cuda.amp.autocast(enabled=autocast, dtype=run_dtype):

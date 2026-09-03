@@ -7,5 +7,7 @@ from .drivetransformer_layers import (
         DriveTransformerPreDecoder,
         DriveTransformerPreDecoderLayer,        
         AttentionLayer,
-        SwiGLULayer
+        SwiGLULayer,
+        capture_attention,
+        attention_label,
 )

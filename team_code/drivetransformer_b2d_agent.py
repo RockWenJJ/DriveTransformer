@@ -35,6 +35,26 @@ def get_entry_point():
     return 'DriveTransformerAgent'
 
 
+def build_test_aug_config(data_aug_conf):
+    """Match dataset get_augmentation() test_mode: isotropic resize + bottom crop."""
+    H, W = data_aug_conf['H'], data_aug_conf['W']
+    fH, fW = data_aug_conf['final_dim']
+    resize = max(fH / H, fW / W)
+    resize_dims = (int(W * resize), int(H * resize))
+    newW, newH = resize_dims
+    bot_pct = float(np.mean(data_aug_conf.get('bot_pct_lim', (0.0, 0.0))))
+    crop_h = int((1 - bot_pct) * newH) - fH
+    crop_w = int(max(0, newW - fW) / 2)
+    return {
+        'resize': resize,
+        'resize_dims': resize_dims,
+        'crop': (crop_w, crop_h, crop_w + fW, crop_h + fH),
+        'flip': False,
+        'rotate': 0,
+        'rotate_3d': 0,
+    }
+
+
 class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
     """
     Drive TransformerAgent
@@ -81,6 +101,15 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         wrap_fp16_model(self.model)
         self.model.to(self.device)
         self.model.eval()
+
+        data_aug_conf = (
+            cfg.data.test.get('data_aug_conf', None)
+            or cfg.data.train.get('data_aug_conf', None)
+        )
+        if data_aug_conf is None:
+            raise ValueError(f'No data_aug_conf found in {self.config_path}')
+        self.aug_config = build_test_aug_config(data_aug_conf)
+        print('Closed-loop aug_config:', self.aug_config)
 
         self.test_pipeline = []
         self.past_ego_pos_cache = []
@@ -406,7 +435,7 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         can_bus[16] = ego_theta
         can_bus[17] = ego_theta / np.pi * 180 
         results['can_bus'] = can_bus
-        results['aug_config'] = {'resize': 0.66, 'resize_dims': (1056, 594), 'crop': (0, 210, 1056, 594), 'flip': False, 'rotate': 0, 'rotate_3d': 0}
+        results['aug_config'] = self.aug_config
         # ego_lcf_feat
         ego_lcf_feat = np.zeros(9)
         ego_lcf_feat[0] = tick_data['speed']

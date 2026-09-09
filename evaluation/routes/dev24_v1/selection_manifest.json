@@ -1,0 +1,1095 @@
+{
+  "version": "dev24_v1",
+  "status": "frozen_for_development_screening",
+  "source": {
+    "file": "source_dev94.xml",
+    "remote_path": "/data5T/wenjj/Projects/Bench2Drive/leaderboard/data/bench2drive_dev94.xml",
+    "sha256": "edde302e6d8b5cab0538036b3ab549380792925933b4ec90c067919c436ddb17"
+  },
+  "selection_basis": "Fixed behavior quotas, route geometry, town/weather coverage; no model-result input.",
+  "restrictions": [
+    "Development screening only; not a representative dev94 estimate.",
+    "Keep XML, seeds, sharding and controller protocol identical for paired comparisons.",
+    "Do not silently delete failed/missing routes or change the selection after seeing scores.",
+    "Weather variants use different route geometry; they are not a controlled weather ablation."
+  ],
+  "summary": {
+    "routes": 24,
+    "parent_routes": 94,
+    "groups": 6,
+    "routes_per_group": 4,
+    "scenario_types": 22,
+    "towns": {
+      "Town01": 1,
+      "Town03": 2,
+      "Town04": 3,
+      "Town05": 1,
+      "Town06": 1,
+      "Town07": 1,
+      "Town11": 1,
+      "Town12": 8,
+      "Town13": 6
+    },
+    "daytime": 15,
+    "nighttime": 9,
+    "precipitation": 12,
+    "no_precipitation": 12,
+    "selected_waypoint_polyline_length_m": 2397.46,
+    "parent_waypoint_polyline_length_m": 9890.64,
+    "route_count_reduction_pct": 74.47
+  },
+  "xml": {
+    "file": "bench2drive_dev24_v1.xml",
+    "sha256": "f260d3918b776ac47df6b5908dccbc9457953a61b6eab0bd24e7397102b08cff",
+    "route_ids_in_xml_order": [
+      "3410",
+      "27494",
+      "2509",
+      "1825",
+      "26406",
+      "3813",
+      "3048",
+      "26401",
+      "26990",
+      "26944",
+      "3255",
+      "3514",
+      "17598",
+      "26956",
+      "28035",
+      "2397",
+      "3890",
+      "3904",
+      "14842",
+      "25968",
+      "2373",
+      "25928",
+      "11381",
+      "25378"
+    ]
+  },
+  "shards": [
+    {
+      "file": "bench2drive_dev24_v1_shard1.xml",
+      "sha256": "d54d0c46918043250fc02202761e7e4caf471586d1544eea74539040d751e5b8",
+      "route_ids_in_xml_order": [
+        "26406",
+        "17598",
+        "28035",
+        "3890",
+        "3904",
+        "25928"
+      ],
+      "waypoint_polyline_length_m": 597.802
+    },
+    {
+      "file": "bench2drive_dev24_v1_shard2.xml",
+      "sha256": "abd7a410330548f1101e32d0906e436e1675cbd0ab3f2f38f2d064a8f10455d9",
+      "route_ids_in_xml_order": [
+        "3410",
+        "26401",
+        "26990",
+        "3514",
+        "2397",
+        "2373"
+      ],
+      "waypoint_polyline_length_m": 593.296
+    },
+    {
+      "file": "bench2drive_dev24_v1_shard3.xml",
+      "sha256": "7c7624516287f4763adfa8b75bb612057d20b5ebb4bb095465513ca24ef09c40",
+      "route_ids_in_xml_order": [
+        "1825",
+        "3813",
+        "26944",
+        "3255",
+        "25968",
+        "11381"
+      ],
+      "waypoint_polyline_length_m": 605.386
+    },
+    {
+      "file": "bench2drive_dev24_v1_shard4.xml",
+      "sha256": "58f1a678b847160df88d63e15035620c74b63bc8d447bb22cef9d59795f1ae89",
+      "route_ids_in_xml_order": [
+        "27494",
+        "2509",
+        "3048",
+        "26956",
+        "14842",
+        "25378"
+      ],
+      "waypoint_polyline_length_m": 600.976
+    }
+  ],
+  "routes": [
+    {
+      "route_id": "3410",
+      "record_id": "RouteScenario_3410_rep0",
+      "group": "obstacles",
+      "group_zh": "绕障与借道",
+      "scenario_type": "AccidentTwoWays",
+      "reason": "双向事故绕行，夜雨",
+      "town": "Town13",
+      "road_id": "640",
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 68,
+      "waypoint_polyline_length_m": 133.445,
+      "max_8m_chord_bend_deg": 2.861,
+      "shard": 2
+    },
+    {
+      "route_id": "27494",
+      "record_id": "RouteScenario_27494_rep0",
+      "group": "stop_start",
+      "group_zh": "停车与起步",
+      "scenario_type": "BlockedIntersection",
+      "reason": "堵塞路口等待与通过时机",
+      "town": "Town04",
+      "road_id": "16",
+      "night": false,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "70.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        },
+        {
+          "cloudiness": "70.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        }
+      ],
+      "waypoint_count": 30,
+      "waypoint_polyline_length_m": 81.896,
+      "max_8m_chord_bend_deg": 40.541,
+      "shard": 4
+    },
+    {
+      "route_id": "2509",
+      "record_id": "RouteScenario_2509_rep0",
+      "group": "obstacles",
+      "group_zh": "绕障与借道",
+      "scenario_type": "ConstructionObstacle",
+      "reason": "施工绕障",
+      "town": "Town12",
+      "road_id": "837",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 68,
+      "waypoint_polyline_length_m": 135.087,
+      "max_8m_chord_bend_deg": 1.468,
+      "shard": 4
+    },
+    {
+      "route_id": "1825",
+      "record_id": "RouteScenario_1825_rep0",
+      "group": "obstacles",
+      "group_zh": "绕障与借道",
+      "scenario_type": "ConstructionObstacleTwoWays",
+      "reason": "双向施工借道，夜雨",
+      "town": "Town12",
+      "road_id": null,
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 68,
+      "waypoint_polyline_length_m": 134.012,
+      "max_8m_chord_bend_deg": 0.716,
+      "shard": 3
+    },
+    {
+      "route_id": "26406",
+      "record_id": "RouteScenario_26406_rep0",
+      "group": "stop_start",
+      "group_zh": "停车与起步",
+      "scenario_type": "HardBreakRoute",
+      "reason": "前车急刹与纵向响应",
+      "town": "Town04",
+      "road_id": "45",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 68,
+      "waypoint_polyline_length_m": 146.033,
+      "max_8m_chord_bend_deg": 3.622,
+      "shard": 1
+    },
+    {
+      "route_id": "3813",
+      "record_id": "RouteScenario_3813_rep0",
+      "group": "merging",
+      "group_zh": "并线与汇入",
+      "scenario_type": "HighwayCutIn",
+      "reason": "高速被切入",
+      "town": "Town13",
+      "road_id": "1411",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "50.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "50.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 28,
+      "waypoint_polyline_length_m": 142.027,
+      "max_8m_chord_bend_deg": 0.0,
+      "shard": 3
+    },
+    {
+      "route_id": "3048",
+      "record_id": "RouteScenario_3048_rep0",
+      "group": "merging",
+      "group_zh": "并线与汇入",
+      "scenario_type": "MergerIntoSlowTraffic",
+      "reason": "低速车流汇入",
+      "town": "Town12",
+      "road_id": "639",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 28,
+      "waypoint_polyline_length_m": 163.812,
+      "max_8m_chord_bend_deg": 12.73,
+      "shard": 4
+    },
+    {
+      "route_id": "26401",
+      "record_id": "RouteScenario_26401_rep0",
+      "group": "merging",
+      "group_zh": "并线与汇入",
+      "scenario_type": "MergerIntoSlowTrafficV2",
+      "reason": "第二类汇入，夜间无降雨",
+      "town": "Town06",
+      "road_id": "21",
+      "night": true,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "60.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "60.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 27,
+      "waypoint_polyline_length_m": 124.414,
+      "max_8m_chord_bend_deg": 5.243,
+      "shard": 2
+    },
+    {
+      "route_id": "26990",
+      "record_id": "RouteScenario_26990_rep0",
+      "group": "turning",
+      "group_zh": "转弯与横向控制",
+      "scenario_type": "NonSignalizedJunctionLeftTurn",
+      "reason": "无信号左转与横向车流",
+      "town": "Town03",
+      "road_id": "18",
+      "night": false,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        }
+      ],
+      "waypoint_count": 27,
+      "waypoint_polyline_length_m": 80.016,
+      "max_8m_chord_bend_deg": 45.22,
+      "shard": 2
+    },
+    {
+      "route_id": "26944",
+      "record_id": "RouteScenario_26944_rep0",
+      "group": "rules",
+      "group_zh": "红灯与让行",
+      "scenario_type": "OppositeVehicleRunningRedLight",
+      "reason": "对向闯红灯车辆的优先避让",
+      "town": "Town04",
+      "road_id": "10",
+      "night": false,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        }
+      ],
+      "waypoint_count": 30,
+      "waypoint_polyline_length_m": 87.908,
+      "max_8m_chord_bend_deg": 0.716,
+      "shard": 3
+    },
+    {
+      "route_id": "3255",
+      "record_id": "RouteScenario_3255_rep0",
+      "group": "stop_start",
+      "group_zh": "停车与起步",
+      "scenario_type": "ParkingCrossingPedestrian",
+      "reason": "停放车辆附近行人横穿",
+      "town": "Town13",
+      "road_id": "1237",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 60,
+      "waypoint_polyline_length_m": 118.065,
+      "max_8m_chord_bend_deg": 0.716,
+      "shard": 3
+    },
+    {
+      "route_id": "3514",
+      "record_id": "RouteScenario_3514_rep0",
+      "group": "stop_start",
+      "group_zh": "停车与起步",
+      "scenario_type": "ParkingExit",
+      "reason": "驶出停车位",
+      "town": "Town13",
+      "road_id": "892",
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 68,
+      "waypoint_polyline_length_m": 134.087,
+      "max_8m_chord_bend_deg": 0.716,
+      "shard": 2
+    },
+    {
+      "route_id": "17598",
+      "record_id": "RouteScenario_17598_rep0",
+      "group": "merging",
+      "group_zh": "并线与汇入",
+      "scenario_type": "SequentialLaneChange",
+      "reason": "连续换道，夜雨",
+      "town": "Town12",
+      "road_id": "738",
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "3.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "3.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 25,
+      "waypoint_polyline_length_m": 122.444,
+      "max_8m_chord_bend_deg": 19.853,
+      "shard": 1
+    },
+    {
+      "route_id": "26956",
+      "record_id": "RouteScenario_26956_rep0",
+      "group": "turning",
+      "group_zh": "转弯与横向控制",
+      "scenario_type": "SignalizedJunctionRightTurn",
+      "reason": "有信号右转",
+      "town": "Town05",
+      "road_id": "0",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "50.0",
+          "fog_density": "0.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "70.0",
+          "sun_azimuth_angle": "0.0",
+          "wetness": "0.0",
+          "wind_intensity": "0.0"
+        },
+        {
+          "cloudiness": "50.0",
+          "fog_density": "0.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "70.0",
+          "sun_azimuth_angle": "0.0",
+          "wetness": "0.0",
+          "wind_intensity": "0.0"
+        }
+      ],
+      "waypoint_count": 27,
+      "waypoint_polyline_length_m": 70.07,
+      "max_8m_chord_bend_deg": 47.031,
+      "shard": 4
+    },
+    {
+      "route_id": "28035",
+      "record_id": "RouteScenario_28035_rep0",
+      "group": "turning",
+      "group_zh": "转弯与横向控制",
+      "scenario_type": "T_Junction",
+      "reason": "较紧的自车转弯，依据路线几何选择",
+      "town": "Town01",
+      "road_id": "24",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 25,
+      "waypoint_polyline_length_m": 112.891,
+      "max_8m_chord_bend_deg": 77.48,
+      "shard": 1
+    },
+    {
+      "route_id": "2397",
+      "record_id": "RouteScenario_2397_rep0",
+      "group": "normal",
+      "group_zh": "普通通行对照",
+      "scenario_type": "VanillaNonSignalizedTurn",
+      "reason": "普通无信号转弯，夜雨",
+      "town": "Town12",
+      "road_id": null,
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 18,
+      "waypoint_polyline_length_m": 60.493,
+      "max_8m_chord_bend_deg": 49.988,
+      "shard": 2
+    },
+    {
+      "route_id": "3890",
+      "record_id": "RouteScenario_3890_rep0",
+      "group": "normal",
+      "group_zh": "普通通行对照",
+      "scenario_type": "VanillaNonSignalizedTurn",
+      "reason": "普通无信号转弯，白天降雨",
+      "town": "Town13",
+      "road_id": "1143",
+      "night": false,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        }
+      ],
+      "waypoint_count": 18,
+      "waypoint_polyline_length_m": 59.145,
+      "max_8m_chord_bend_deg": 48.297,
+      "shard": 1
+    },
+    {
+      "route_id": "3904",
+      "record_id": "RouteScenario_3904_rep0",
+      "group": "rules",
+      "group_zh": "红灯与让行",
+      "scenario_type": "VanillaNonSignalizedTurnEncounterStopsign",
+      "reason": "停止标志停车，夜雨",
+      "town": "Town13",
+      "road_id": "390",
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 19,
+      "waypoint_polyline_length_m": 55.251,
+      "max_8m_chord_bend_deg": 47.291,
+      "shard": 1
+    },
+    {
+      "route_id": "14842",
+      "record_id": "RouteScenario_14842_rep0",
+      "group": "normal",
+      "group_zh": "普通通行对照",
+      "scenario_type": "VanillaSignalizedTurnEncounterGreenLight",
+      "reason": "绿灯通过，夜雨",
+      "town": "Town12",
+      "road_id": "282",
+      "night": true,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        },
+        {
+          "cloudiness": "100.0",
+          "fog_density": "100.0",
+          "precipitation": "100.0",
+          "precipitation_deposits": "90.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "100.0",
+          "wind_intensity": "100.0"
+        }
+      ],
+      "waypoint_count": 18,
+      "waypoint_polyline_length_m": 53.864,
+      "max_8m_chord_bend_deg": 40.175,
+      "shard": 4
+    },
+    {
+      "route_id": "25968",
+      "record_id": "RouteScenario_25968_rep0",
+      "group": "normal",
+      "group_zh": "普通通行对照",
+      "scenario_type": "VanillaSignalizedTurnEncounterGreenLight",
+      "reason": "绿灯通过，白天无降雨",
+      "town": "Town07",
+      "road_id": "25",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 18,
+      "waypoint_polyline_length_m": 50.794,
+      "max_8m_chord_bend_deg": 45.786,
+      "shard": 3
+    },
+    {
+      "route_id": "2373",
+      "record_id": "RouteScenario_2373_rep0",
+      "group": "rules",
+      "group_zh": "红灯与让行",
+      "scenario_type": "VanillaSignalizedTurnEncounterRedLight",
+      "reason": "相关红灯停车",
+      "town": "Town12",
+      "road_id": null,
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "15.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 18,
+      "waypoint_polyline_length_m": 60.841,
+      "max_8m_chord_bend_deg": 48.969,
+      "shard": 2
+    },
+    {
+      "route_id": "25928",
+      "record_id": "RouteScenario_25928_rep0",
+      "group": "obstacles",
+      "group_zh": "绕障与借道",
+      "scenario_type": "VehicleOpensDoorTwoWays",
+      "reason": "开门障碍与对向交通",
+      "town": "Town11",
+      "road_id": "268",
+      "night": false,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "2.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 52,
+      "waypoint_polyline_length_m": 102.038,
+      "max_8m_chord_bend_deg": 1.0,
+      "shard": 1
+    },
+    {
+      "route_id": "11381",
+      "record_id": "RouteScenario_11381_rep0",
+      "group": "turning",
+      "group_zh": "转弯与横向控制",
+      "scenario_type": "VehicleTurningRoutePedestrian",
+      "reason": "夜间转弯与行人交互",
+      "town": "Town12",
+      "road_id": "77",
+      "night": true,
+      "precipitation_present": false,
+      "weather": [
+        {
+          "cloudiness": "5.0",
+          "fog_density": "60.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        },
+        {
+          "cloudiness": "5.0",
+          "fog_density": "60.0",
+          "precipitation": "0.0",
+          "precipitation_deposits": "0.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "-90.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "10.0"
+        }
+      ],
+      "waypoint_count": 28,
+      "waypoint_polyline_length_m": 72.58,
+      "max_8m_chord_bend_deg": 45.197,
+      "shard": 3
+    },
+    {
+      "route_id": "25378",
+      "record_id": "RouteScenario_25378_rep0",
+      "group": "rules",
+      "group_zh": "红灯与让行",
+      "scenario_type": "YieldToEmergencyVehicle",
+      "reason": "紧急车辆让行",
+      "town": "Town03",
+      "road_id": null,
+      "night": false,
+      "precipitation_present": true,
+      "weather": [
+        {
+          "cloudiness": "70.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "0",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        },
+        {
+          "cloudiness": "70.0",
+          "fog_density": "50.0",
+          "precipitation": "60.0",
+          "precipitation_deposits": "60.0",
+          "route_percentage": "100",
+          "sun_altitude_angle": "45.0",
+          "sun_azimuth_angle": "-1.0",
+          "wetness": "0.0",
+          "wind_intensity": "60.0"
+        }
+      ],
+      "waypoint_count": 49,
+      "waypoint_polyline_length_m": 96.247,
+      "max_8m_chord_bend_deg": 0.716,
+      "shard": 4
+    }
+  ],
+  "structural_validation": {
+    "unique_ids": true,
+    "subset_of_dev94": true,
+    "all_route_nodes_preserved": true,
+    "unique_waypoint_sequences": true,
+    "four_disjoint_six_route_shards": true,
+    "original_relative_order_preserved": true
+  }
+}

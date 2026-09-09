@@ -22,6 +22,7 @@ from mmcv.datasets.map_utils.struct import LiDARInstanceLines
 from shapely.geometry import LineString
 import joblib
 import time
+from drivetransformer_contracts import acceleration_xy, frame_timestamp
 from matplotlib import pyplot as plt
 
 
@@ -47,6 +48,8 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                  use_splited_data=True, # To reduce time of initialization and save memory, we do not read data of all clips at beginning (like UniAD/VAD reproduced in Bench2DriveZoo).
                                         # instead, we read a clip data if it is needed during training.
                  cache_lenth=4, # the number of clip data cached in memory. 
+                 timestamp_frame_period_s=0.1,
+                 ego_accel_mode='xy',
                  *args,
                  **kwargs):
         
@@ -57,6 +60,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         self.with_velocity = with_velocity 
         self.NameMapping  = name_mapping
         self.sample_interval = sample_interval
+        self.timestamp_frame_period_s = timestamp_frame_period_s
+        self.ego_accel_mode = ego_accel_mode
+        frame_timestamp(0, timestamp_frame_period_s)
+        acceleration_xy(np.zeros(3), ego_accel_mode)
         self.past_frames = past_frames
         self.future_frames = future_frames
         self.map_file = map_file
@@ -334,7 +341,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
             ego_accel=info['ego_accel'].astype(np.float32),
             ego_rotation_rate=info['ego_rotation_rate'].astype(np.float32),
             npc2world=info['npc2world'].astype(np.float32),
-            timestamp=info['frame_idx']/2,
+            timestamp=frame_timestamp(info['frame_idx'], self.timestamp_frame_period_s),
         )
         
         if self.modality['use_camera']:
@@ -397,7 +404,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         # ego_lcf_feat
         ego_lcf_feat = np.zeros(9)
         ego_lcf_feat[0:2] = input_dict['ego_vel'][0:2]
-        ego_lcf_feat[2:4] = input_dict['ego_accel'][2:4]
+        ego_lcf_feat[2:4] = acceleration_xy(input_dict['ego_accel'], self.ego_accel_mode)
         ego_lcf_feat[4] = input_dict['ego_rotation_rate'][-1]
         ego_lcf_feat[5] = info['ego_size'][1]
         ego_lcf_feat[6] = info['ego_size'][0]
@@ -807,5 +814,4 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
             "rotate_3d": rotate_3d,
         }
         return aug_config
-
 

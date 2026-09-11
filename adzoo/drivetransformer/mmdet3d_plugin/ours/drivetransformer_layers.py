@@ -1,4 +1,5 @@
 import warnings
+from functools import partial
 import copy
 import contextlib
 import numpy as np
@@ -80,6 +81,9 @@ class AttentionLayer(nn.Module):
         dim = embed_dims
         self.embed_dims = embed_dims
         self.head_dim = head_dim
+        # Installed FlashAttention backward rejects 96-d heads with dropout.
+        self.attention_op = ((xops.fmha.cutlass.FwOp, xops.fmha.cutlass.BwOp)
+                             if head_dim == 96 else None)
         self.num_heads = dim // head_dim
         self.no_wq = no_wq
         if not self.no_wq:
@@ -195,11 +199,12 @@ class AttentionLayer(nn.Module):
             attn_out = torch.matmul(weights, v).permute(0, 2, 1, 3).to(query.dtype)
         elif self.with_cp:
             attn_out = cp.checkpoint(
-                xops.memory_efficient_attention,
+                partial(xops.memory_efficient_attention, op=self.attention_op),
                 query, key, value, attn_bias, self.attn_drop)
         else:
             attn_out = xops.memory_efficient_attention(
-                query, key, value, attn_bias=attn_bias, p=self.attn_drop)
+                query, key, value, attn_bias=attn_bias, p=self.attn_drop,
+                op=self.attention_op)
         if head_gate is not None:
             assert head_gate.numel() == self.num_heads
             gate = head_gate.to(device=attn_out.device, dtype=attn_out.dtype)
@@ -987,7 +992,13 @@ class DriveTransformerDecoderLayer(BaseModule):
                 **kwargs
                 ):
         if self.use_checkpoint and self.training:
-            x = cp.checkpoint(self._forward, *args, **kwargs)
+            # Older torch checkpoint only accepts positional inputs; capture
+            # the decoder's keyword-only masks in a closure.
+            if kwargs:
+                forward_with_kwargs = partial(self._forward, **kwargs)
+                x = cp.checkpoint(forward_with_kwargs, *args)
+            else:
+                x = cp.checkpoint(self._forward, *args)
 
         else:
             x = self._forward(*args, **kwargs)

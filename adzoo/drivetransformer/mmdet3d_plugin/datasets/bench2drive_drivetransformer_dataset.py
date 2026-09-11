@@ -23,6 +23,7 @@ from shapely.geometry import LineString
 import joblib
 import time
 from matplotlib import pyplot as plt
+from .law_pairing import find_future_pair
 
 
 @DATASETS.register_module()
@@ -47,6 +48,7 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                  use_splited_data=True, # To reduce time of initialization and save memory, we do not read data of all clips at beginning (like UniAD/VAD reproduced in Bench2DriveZoo).
                                         # instead, we read a clip data if it is needed during training.
                  cache_lenth=4, # the number of clip data cached in memory. 
+                 law_future=None, # optional, training-only future image pairs.
                  *args,
                  **kwargs):
         
@@ -81,6 +83,17 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         self.collect_keys = collect_keys 
         self.data_aug_conf = data_aug_conf
         self.sub_seq_lenth = sub_seq_lenth
+        self.law_future = copy.deepcopy(law_future)
+        if self.law_future is not None:
+            self.law_future_pipeline = Compose(self.law_future.pop('pipeline'))
+            allowed = {'frame_offset', 'frame_idx_step', 'frame_period_seconds'}
+            if set(self.law_future) - allowed:
+                raise ValueError('Unknown LAW future-pair configuration')
+            offset = self.law_future.get('frame_offset')
+            step = self.law_future.get('frame_idx_step', 1)
+            period = self.law_future.get('frame_period_seconds', 0.1)
+            if not isinstance(offset, int) or offset <= 0 or not isinstance(step, int) or step <= 0 or period <= 0:
+                raise ValueError('LAW requires positive frame_offset, frame_idx_step and frame_period_seconds')
         
         # for clip data cache
         self.cache_lenth = cache_lenth
@@ -241,7 +254,32 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         if self.filter_empty_gt and (example is None or ~(example['gt_labels_3d']._data != -1).any()):
             return None
             
-        return self.union2one([example])
+        example = self.union2one([example])
+        if self.law_future is not None:
+            self.add_law_future(example, index, aug_config)
+        return example
+
+    def add_law_future(self, example, index, aug_config):
+        paths, meta = find_future_pair(index, len(self), self.get_data_by_index,
+                                       self.data_root, **self.law_future)
+        if paths is None:
+            # A placeholder for collation only; invalid images are never encoded.
+            future_img = torch.zeros_like(example['img'].data[0])
+        else:
+            # Image-only pipeline: no future annotations, map labels, poses, or
+            # calls to get_data_info. Reuse the current sample's geometric aug.
+            future = dict(img_filename=paths,
+                          lidar2img=[np.eye(4) for _ in paths],
+                          aug_config=copy.deepcopy(aug_config))
+            future = self.law_future_pipeline(future)
+            if future is None:
+                raise RuntimeError('LAW future pipeline unexpectedly dropped a valid sample')
+            future_img = future['img'].data
+            if future_img.shape != example['img'].data[0].shape:
+                raise ValueError('LAW future image augmentation/shape differs from current frame')
+        example['law_future_img'] = DC(future_img, stack=True)
+        example['law_future_valid'] = DC(torch.tensor(meta['valid']), stack=True, pad_dims=None)
+        example['law_future_meta'] = DC(meta, cpu_only=True)
     
     def prepare_test_data(self, index, aug_config):
         """Prepare data for testing.
@@ -807,5 +845,4 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
             "rotate_3d": rotate_3d,
         }
         return aug_config
-
 

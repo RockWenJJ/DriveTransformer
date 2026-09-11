@@ -1,0 +1,11 @@
+{
+  "date": "2026-09-11",
+  "host": "wenjj_alicloud_A100",
+  "environment": "/home/wenjj/miniconda3/envs/drivetransformer",
+  "torch": "2.1.0+cu118",
+  "pytest": "8.3.5",
+  "command": "OMP_NUM_THREADS=1 python -m pytest -q tests/test_law.py",
+  "result": "13 passed, 1 warning in 6.44s",
+  "warning": "PyTorch TypedStorage deprecation",
+  "distributed_tests": "two real CPU/Gloo ranks: one valid rank and one empty rank; both ranks empty; gradients checked against single-process reference"
+}

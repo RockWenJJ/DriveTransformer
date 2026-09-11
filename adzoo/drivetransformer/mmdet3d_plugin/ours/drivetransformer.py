@@ -10,6 +10,8 @@ from mmcv.models.detectors.mvx_two_stage import MVXTwoStageDetector
 from adzoo.drivetransformer.mmdet3d_plugin.models.utils.grid_mask import GridMask
 from collections import OrderedDict
 import numpy as np
+from .law import LAWLatentWorldModel, temporary_eval
+from .law_hook import LAWLossWeightHook  # register optional training hook
 
 @DETECTORS.register_module()
 class DriveTransformer(MVXTwoStageDetector):
@@ -35,6 +37,7 @@ class DriveTransformer(MVXTwoStageDetector):
                  pretrained=None,
                  fut_ts=6,
                  fut_mode=6,
+                 law_cfg=None,
                  ):
 
         super(DriveTransformer,
@@ -54,6 +57,12 @@ class DriveTransformer(MVXTwoStageDetector):
         self.planning_metric = None
         self.test_flag = False
         self.position_level = 0
+        self.law = None
+        if law_cfg is not None:
+            law_cfg = copy.deepcopy(law_cfg)
+            law_cfg.setdefault('embed_dims', self.pts_bbox_head.embed_dims)
+            law_cfg.setdefault('action_steps', self.pts_bbox_head.fut_ts_ego_fix_time)
+            self.law = LAWLatentWorldModel(**law_cfg)
     
     @force_fp32()
     def forward(self, data, return_loss=True, **kwargs):
@@ -121,6 +130,9 @@ class DriveTransformer(MVXTwoStageDetector):
                       ego_fut_cmd=None,
                       ego_lcf_feat=None,
                       gt_attr_labels=None,
+                      law_future_img=None,
+                      law_future_valid=None,
+                      law_future_meta=None,
                       **data,
                       ):
         """Forward training function.
@@ -147,6 +159,8 @@ class DriveTransformer(MVXTwoStageDetector):
         if self.test_flag: #for interval evaluation
             self.pts_bbox_head.reset_memory()
             self.test_flag = False
+        if self.law is not None and (law_future_img is None or law_future_valid is None):
+            raise ValueError('LAW training requires future images and pair masks from the dataset')
         img_feats = self.extract_img_feat(img)
         data_t = dict()
         if 'timestamp' in data:
@@ -178,7 +192,31 @@ class DriveTransformer(MVXTwoStageDetector):
             preds_dicts=preds_dicts,
             img_metas=img_metas
         )
+        if self.law is not None:
+            losses.update(self.forward_law(img_feats, preds_dicts,
+                                           law_future_img, law_future_valid))
         return self._parse_losses(losses, num_samples=img.shape[0])
+
+    def forward_law(self, img_feats, predictions, future_img, future_valid):
+        """Auxiliary path: never call pts_bbox_head on future observations."""
+        valid = future_valid.to(device=img_feats.device, dtype=torch.bool).reshape(-1)
+        if future_img.ndim != 5 or len(future_img) != len(img_feats) or len(valid) != len(img_feats):
+            raise ValueError('LAW future images must be [B, camera, C, H, W] with B masks')
+        current = self.law.encode(img_feats)
+        scores = predictions.get('ego_traj_cls_scores')
+        action = self.law.select_action(predictions['ego_fut_preds_fix_time'][-1],
+                                        scores[-1] if scores is not None else None)
+        predicted = self.law(current, action)
+        target = torch.zeros_like(current)
+        if valid.any():
+            # eval prevents a second update to BN statistics and disables random
+            # target dropout/GridMask. Restore child flags even on an exception.
+            with torch.no_grad(), temporary_eval(self.img_backbone,
+                                                 self.img_neck if self.with_img_neck else None,
+                                                 self.grid_mask):
+                future_features = self.extract_img_feat(future_img[valid])[self.position_level][:, 0]
+                target[valid] = self.law.encode(future_features)
+        return self.law.loss(predicted, target, valid)
 
     def forward_test(
         self,

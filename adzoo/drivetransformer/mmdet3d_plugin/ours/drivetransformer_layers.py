@@ -76,6 +76,7 @@ class AttentionLayer(nn.Module):
             no_wq=False,
             extra_post_norm=False,
             with_cp=False,
+            eval_dropout=False,
         ):
         super().__init__()
         dim = embed_dims
@@ -102,6 +103,7 @@ class AttentionLayer(nn.Module):
         )
         self.proj = nn.Linear(dim, dim)
         self.attn_drop = attn_drop
+        self.eval_dropout = eval_dropout  # Explicit opt-in for historical replay.
         self.fp16_enabled = False
         self.batch_first = batch_first
         self.apply(self._init_weights)
@@ -170,6 +172,7 @@ class AttentionLayer(nn.Module):
         key = self.w_k(key).view(B, N_KV, self.num_heads, -1)
         value = self.w_v(value).view(B, N_KV, self.num_heads, -1)
 
+        dropout_p = self.attn_drop if (self.training or self.eval_dropout) else 0.0
         if _ATTN_CAPTURE:
             # Explicit attention so weights are inspectable. Shapes:
             # query/key/value: [B, N, H, D] -> scores [B, H, N_Q, N_KV].
@@ -196,14 +199,15 @@ class AttentionLayer(nn.Module):
                 "num_keys": N_KV,
                 "head_gate": None if head_gate is None else head_gate.detach().float().cpu(),
             })
-            attn_out = torch.matmul(weights, v).permute(0, 2, 1, 3).to(query.dtype)
+            dropped_weights = F.dropout(weights, p=dropout_p, training=dropout_p > 0)
+            attn_out = torch.matmul(dropped_weights, v).permute(0, 2, 1, 3).to(query.dtype)
         elif self.with_cp:
             attn_out = cp.checkpoint(
                 partial(xops.memory_efficient_attention, op=self.attention_op),
-                query, key, value, attn_bias, self.attn_drop)
+                query, key, value, attn_bias, dropout_p)
         else:
             attn_out = xops.memory_efficient_attention(
-                query, key, value, attn_bias=attn_bias, p=self.attn_drop,
+                query, key, value, attn_bias=attn_bias, p=dropout_p,
                 op=self.attention_op)
         if head_gate is not None:
             assert head_gate.numel() == self.num_heads

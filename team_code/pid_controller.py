@@ -1,4 +1,5 @@
 import numpy as np
+from drivetransformer_contracts import target_speed_from_time_path
 
 class DecouplePIDController(object):
     """
@@ -21,7 +22,8 @@ class DecouplePIDController(object):
     
     def step(self, traj_fix_time, traj_fix_dist, current_speed):
         
-        desired_speed = np.linalg.norm(traj_fix_time[10] - traj_fix_time[5]) * 2.0 # average speed between 0.5s-1s
+        # Labels begin at 0.1s: preserve the existing 0.6--1.1s window.
+        desired_speed = target_speed_from_time_path(traj_fix_time)
         if desired_speed < self.brake_threshold: # brake if desired speed is small
             throttle = 0.0
             brake = 1.0

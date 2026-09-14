@@ -118,15 +118,6 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         self.aug_config = build_test_aug_config(data_aug_conf)
         print('Closed-loop aug_config:', self.aug_config)
 
-        data_aug_conf = (
-            cfg.data.test.get('data_aug_conf', None)
-            or cfg.data.train.get('data_aug_conf', None)
-        )
-        if data_aug_conf is None:
-            raise ValueError(f'No data_aug_conf found in {self.config_path}')
-        self.aug_config = build_test_aug_config(data_aug_conf)
-        print('Closed-loop aug_config:', self.aug_config)
-
         self.test_pipeline = []
         self.past_ego_pos_cache = []
         self.cache_lenth = 20

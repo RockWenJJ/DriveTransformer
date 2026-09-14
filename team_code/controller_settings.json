@@ -1,0 +1,14 @@
+{
+  "policy_name": "pi_feedforward_v4",
+  "kp": 2.0,
+  "ki_per_second": 0.6,
+  "max_integral_effort": 0.35,
+  "brake_gain": 0.03,
+  "brake_effort_on": 0.04,
+  "brake_effort_off": 0.01,
+  "low_speed_coast_limit": 2.0,
+  "overspeed_brake_margin": 0.5,
+  "stopped_speed_epsilon": 0.01,
+  "dt_seconds": 0.1,
+  "feedforward_effort": 0.2
+}

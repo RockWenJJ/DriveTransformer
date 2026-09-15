@@ -26,6 +26,10 @@ from mmcv.parallel.collate import collate as  mm_collate_to_batch_form
 from mmcv.core.bbox import get_box_type
 from team_code.planner import RoutePlanner
 from pyquaternion import Quaternion
+from drivetransformer_contracts import (
+    acceleration_xy, frame_timestamp, decode_fixed_distance,
+    apply_attention_eval_policy,
+)
 
 SAVE_PATH = os.environ.get('SAVE_PATH', None)
 IS_BENCH2DRIVE = os.environ.get('IS_BENCH2DRIVE', None)
@@ -74,6 +78,7 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         self.initialized = False
         self.device = "cuda"
         cfg = Config.fromfile(self.config_path)
+        self.inference_contract = dict(cfg.get('inference_contract', {}))
         self.cameras = ['CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT']
         #remap path
         if hasattr(cfg, 'plugin'):
@@ -101,6 +106,8 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         wrap_fp16_model(self.model)
         self.model.to(self.device)
         self.model.eval()
+        apply_attention_eval_policy(self.model, self.inference_contract.get('legacy_eval_dropout', False))
+        print('Inference contract:', self.inference_contract)
 
         data_aug_conf = (
             cfg.data.test.get('data_aug_conf', None)
@@ -408,7 +415,8 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         results['folder'] = ' '
         results['scene_token'] = ' '  
         results['frame_idx'] = 0
-        results['timestamp'] = np.array(self.step / 20)
+        results['timestamp'] = np.array(frame_timestamp(
+            self.step, 0.05 * self.inference_contract.get('timestamp_scale', 1.0)))
         results['box_type_3d'], _ = get_box_type('LiDAR')
         results['index'] = self.step
         results['prev_exists'] = (self.step > 1) 
@@ -439,7 +447,7 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         # ego_lcf_feat
         ego_lcf_feat = np.zeros(9)
         ego_lcf_feat[0] = tick_data['speed']
-        ego_lcf_feat[2:4] = can_bus[10:12].copy()
+        ego_lcf_feat[2:4] = acceleration_xy(can_bus[10:13], self.inference_contract.get('ego_accel_mode', 'xy'))
         ego_lcf_feat[4] = can_bus[15]
         ego_lcf_feat[5] = 4.89238167
         ego_lcf_feat[6] = 1.83671331
@@ -514,12 +522,10 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
         all_out_truck = None
         ego_traj_cls_scores = None
         selected_mode = 0 
-        angles = output_data_batch[0]['ego_fut_preds_fix_dist'][0,selected_mode,:,0].float().cpu().numpy()
-        # for trajectories with fixed distance, the output is the angle with y-axis in lidar coordinate system. 
-        # get the x, y coordinate with the disance and angle.
-        ego_traj_fix_dist = np.arange(1,21,dtype=np.float64).reshape(-1,1).repeat(2,1) 
-        ego_traj_fix_dist[:,0] *= np.cos(angles)
-        ego_traj_fix_dist[:,1] *= np.sin(angles)
+        fixed_dist_values = output_data_batch[0]['ego_fut_preds_fix_dist'][0,selected_mode,:,0].float().cpu().numpy()
+        ego_traj_fix_dist, decode_diagnostics = decode_fixed_distance(
+            fixed_dist_values, self.inference_contract.get('fixed_dist_decoder', 'sin_heading'))
+        self.pid_metadata['fixed_dist_out_of_range_fraction'] = decode_diagnostics['out_of_range_fraction']
         ego_traj_fix_time = output_data_batch[0]['ego_fut_preds_fix_time'][0,selected_mode,:,[1,0]].float().cpu().numpy() 
         if self.step <= 20: # waiting for scenerio initialization (cars are more likely to disappear suddenly in this period)
             steer, throttle, brake = 0.0, 0.0, 1.0

@@ -29,6 +29,21 @@ from mmcv.models.backbones.base_module import BaseModule
 from mmcv.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 
 
+def valid_motion_classification(loss_fn, logits, targets, labels, future_mask,
+                                frame_mask, num_classes):
+    """Normalize motion modes by valid matched agents, never background queries.
+
+    reduce_mean keeps the DDP average equivalent to global valid-agent
+    normalization, including ranks with no positives.
+    """
+    valid = ((labels < num_classes) & future_mask.bool().any(dim=-1)
+             & frame_mask.bool())
+    mean_valid = reduce_mean(valid.sum().float()).item()
+    avg_factor = mean_valid if mean_valid > 0 else 1.0
+    return loss_fn(logits, targets, weight=valid.to(logits.dtype)[:, None],
+                   avg_factor=avg_factor)
+
+
 @HEADS.register_module()
 class DriveTransformerlHead(BaseModule):
     """
@@ -51,6 +66,7 @@ class DriveTransformerlHead(BaseModule):
         agent_num_query_sifted=100,
         fut_ts=6, ## Number of Points
         fut_mode=6,
+        motion_cls_valid_only=False,
         fut_ego_mode=6,
         num_classes=10,
         code_size=10,
@@ -218,6 +234,7 @@ class DriveTransformerlHead(BaseModule):
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_traj = build_loss(loss_traj)
         self.loss_traj_cls = build_loss(loss_traj_cls)
+        self.motion_cls_valid_only = motion_cls_valid_only
         if self.loss_cls.use_sigmoid:
             self.cls_out_channels = num_classes
         else:
@@ -1398,7 +1415,12 @@ class DriveTransformerlHead(BaseModule):
                 traj_cls_scores_pred.new_tensor([traj_cls_avg_factor]))
 
         traj_cls_avg_factor = max(traj_cls_avg_factor, 1)
-        loss_traj_cls = self.loss_traj_cls(traj_cls_scores_pred, traj_cls_scores)
+        if self.motion_cls_valid_only:
+            loss_traj_cls = valid_motion_classification(
+                self.loss_traj_cls, traj_cls_scores_pred, traj_cls_scores,
+                labels, gt_fut_masks, gt_bboxes_mask, self.num_classes)
+        else:
+            loss_traj_cls = self.loss_traj_cls(traj_cls_scores_pred, traj_cls_scores)
         if digit_version(TORCH_VERSION) >= digit_version('1.8'):
             loss_cls = torch.nan_to_num(loss_cls)
             loss_bbox = torch.nan_to_num(loss_bbox)

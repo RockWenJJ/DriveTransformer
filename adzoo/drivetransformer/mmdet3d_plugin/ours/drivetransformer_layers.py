@@ -475,8 +475,7 @@ class DriveTransformerPreDecoderLayer(BaseModule):
                     **kwargs)
                 attn_index += 1
             elif layer == 'ffn':
-                query = self.ffns[ffn_index](
-                    query, None)
+                query = self.ffns[ffn_index](query)
                 ffn_index += 1
         return query
 

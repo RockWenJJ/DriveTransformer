@@ -1,0 +1,50 @@
+test_actual_xformers_bfloat16 (test_consistency.AttentionTests) ... skipped 'CUDA tests explicitly opt in'
+test_actual_xformers_eval_capture_backward_and_checkpoint (test_consistency.AttentionTests) ... skipped 'CUDA tests explicitly opt in'
+test_explicit_eval_deterministic_and_train_dropout_active (test_consistency.AttentionTests) ... ok
+test_actual_optimizer_parameter_groups (test_consistency.ConfigurationTests) ... ok
+test_corrected_and_legacy_profiles_are_explicit (test_consistency.ConfigurationTests) ... ok
+test_classes_come_from_dataset (test_consistency.EvaluationTests) ... ok
+test_closed_loop_missing_is_not_complete (test_consistency.EvaluationTests) ... ok
+test_empty_scene_counts_as_zero_collision (test_consistency.EvaluationTests) ... ok
+test_high_score_gets_first_match (test_consistency.EvaluationTests) ... ok
+test_invalid_future_cannot_cause_collision (test_consistency.EvaluationTests) ... ok
+test_motion_does_not_match_wrong_class (test_consistency.EvaluationTests) ... ok
+test_gravity_is_not_horizontal_acceleration (test_consistency.GeometryTests) ... ok
+test_heading_roundtrip (test_consistency.GeometryTests) ... ok
+test_legacy_decoder_reproduces_old_points (test_consistency.GeometryTests) ... ok
+test_physical_time_matches_online_model_cadence (test_consistency.GeometryTests) ... ok
+test_pid_speed_window_preserves_existing_controller (test_consistency.GeometryTests) ... ok
+test_range_overflow_is_counted_and_finite (test_consistency.GeometryTests) ... ok
+test_speed_and_stationary_path (test_consistency.GeometryTests) ... ok
+test_adding_background_does_not_dilute_loss (test_consistency.MotionLossTests) ... ok
+test_background_and_invalid_future_have_zero_gradient (test_consistency.MotionLossTests) ... ok
+test_empty_positive_batch_has_finite_zero_loss (test_consistency.MotionLossTests) ... ok
+test_sparse_ddp_normalization_is_not_clamped_to_one (test_consistency.MotionLossTests) ... ok
+test_dry_run_uses_this_agent_and_creates_no_results (test_dev24_routing.RouteRoutingTests) ... ok
+test_modified_xml_is_rejected (test_dev24_routing.RouteRoutingTests) ... ok
+test_shards_cover_the_frozen_subset_without_overlap (test_dev24_routing.RouteRoutingTests) ... ok
+test_stale_dev94_binding_is_rejected (test_dev24_routing.RouteRoutingTests) ... ok
+test_adaptive_threshold_can_reproduce_legacy_fallback (test_mapping.MapDecodeTests) ... ok
+test_default_ranking_matches_legacy_flatten_topk (test_mapping.MapDecodeTests) ... ok
+test_short_or_empty_input_does_not_crash_topk (test_mapping.MapDecodeTests) ... ok
+test_threshold_must_allow_empty_output (test_mapping.MapDecodeTests) ... ok
+test_unique_query_mode_does_not_repeat_geometry_under_two_classes (test_mapping.MapDecodeTests) ... ok
+test_clipping_matches_full_geometry_for_random_crossings (test_mapping.MapLabelTests) ... ok
+test_degenerate_line_is_not_a_geometry_target (test_mapping.MapLabelTests) ... ok
+test_empty_labels_are_integer_indices (test_mapping.MapLabelTests) ... ok
+test_exact_duplicate_label_is_only_supervised_once (test_mapping.MapLabelTests) ... ok
+test_exit_and_reentry_never_create_a_bridge (test_mapping.MapLabelTests) ... ok
+test_internal_line_is_unchanged (test_mapping.MapLabelTests) ... ok
+test_legacy_clip_remains_reproducible (test_mapping.MapLabelTests) ... ok
+test_nearby_lines_and_different_classes_remain (test_mapping.MapLabelTests) ... ok
+test_sparse_crossing_is_clipped_at_boundary (test_mapping.MapLabelTests) ... ok
+test_trigger_policy_remains_full_contour (test_mapping.MapLabelTests) ... ok
+test_different_prediction_and_target_point_counts_are_supported (test_mapping.MapLossTests) ... ok
+test_empty_frame_trains_background_without_fake_map (test_mapping.MapLossTests) ... ok
+test_reversed_line_uses_equivalent_point_order (test_mapping.MapLossTests) ... ok
+
+----------------------------------------------------------------------
+Ran 44 tests in 0.571s
+
+OK (skipped=2)
+No apex.normalization!!!!

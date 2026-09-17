@@ -19,7 +19,8 @@ from mmcv.datasets.pipelines import to_tensor
 from mmcv.datasets.custom_3d import Custom3DDataset
 from mmcv.datasets.pipelines import Compose
 from mmcv.datasets.map_utils.struct import LiDARInstanceLines
-from shapely.geometry import LineString
+from shapely.geometry import LineString, box
+from .map_utils.geometry import clip_map_line, deduplicate_map_lines
 import joblib
 import time
 from drivetransformer_contracts import acceleration_xy, frame_timestamp
@@ -48,6 +49,8 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                  use_splited_data=True, # To reduce time of initialization and save memory, we do not read data of all clips at beginning (like UniAD/VAD reproduced in Bench2DriveZoo).
                                         # instead, we read a clip data if it is needed during training.
                  cache_lenth=4, # the number of clip data cached in memory. 
+                 map_clip_mode='legacy', # 'geometric' preserves ROI intersections and disconnected pieces.
+                 map_deduplicate=False, # Opt in for training; keep historical evaluation targets stable.
                  timestamp_frame_period_s=0.1,
                  ego_accel_mode='xy',
                  *args,
@@ -72,6 +75,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         self.future_frames_ego_fix_dist = future_frames_ego_fix_dist
         self.point_cloud_range = np.array(point_cloud_range)
         self.polyline_points_num = polyline_points_num
+        if map_clip_mode not in ('legacy', 'geometric'):
+            raise ValueError('map_clip_mode must be legacy or geometric')
+        self.map_clip_mode = map_clip_mode
+        self.map_deduplicate = map_deduplicate
         self.map_element_class = {'Broken':0, 'Solid':1, 'SolidSolid':2,'Center':3,'TrafficLight':4,'StopSign':5}
         self.MAPCLASSES = list(self.map_element_class.keys())
         self.NUM_MAPCLASSES = len(self.MAPCLASSES)
@@ -500,12 +507,19 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                 chosed_idx.append(idx)
         # precisely search and crop the lines of dense points
         polylines = []
+        roi = box(self.point_cloud_range[0], self.point_cloud_range[1],
+                  self.point_cloud_range[3], self.point_cloud_range[4])
         for idx in chosed_idx:
             if not lane_types[idx] in self.map_element_class.keys():
                 continue
             points = lane_points[idx]
             points = np.concatenate([points,np.ones((points.shape[0],1))],axis=-1)
             points_in_lidar = (world2lidar @ points.T).T
+            if self.map_clip_mode == 'geometric':
+                parts = clip_map_line(points_in_lidar[:, :2], roi)
+                polylines.extend(parts)
+                gt_labels.extend([self.map_element_class[lane_types[idx]]] * len(parts))
+                continue
             mask = (points_in_lidar[:,0] > self.point_cloud_range[0]) & (points_in_lidar[:,0] < self.point_cloud_range[3]) & (points_in_lidar[:,1] > self.point_cloud_range[1]) & (points_in_lidar[:,1] < self.point_cloud_range[4])
             points_in_lidar_range = points_in_lidar[mask,0:2]
             if len(points_in_lidar_range) > 1:
@@ -525,7 +539,9 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                 polylines.append(LineString(np.concatenate((points_in_lidar_range, points_in_lidar_range[0:1]),axis=0)))
                 gt_label = self.map_element_class[trigger_volumes_types[idx]]
                 gt_labels.append(gt_label)
-        gt_labels = torch.tensor(gt_labels)
+        if self.map_deduplicate:
+            polylines, gt_labels = deduplicate_map_lines(polylines, gt_labels)
+        gt_labels = torch.tensor(gt_labels, dtype=torch.long)
         gt_bboxes = LiDARInstanceLines(polylines,fixed_num=self.polyline_points_num,patch_size=(self.point_cloud_range[4]-self.point_cloud_range[1],self.point_cloud_range[3]-self.point_cloud_range[0]))
         return gt_labels, gt_bboxes
 

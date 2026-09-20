@@ -189,7 +189,7 @@ class DINOv3ViT(nn.Module):
 
 @BACKBONES.register_module()
 class FrozenDINOv3ViT(BaseModule):
-    """Frozen DINOv3 ViT with a trainable stride-32 feature adapter."""
+    """DINOv3 ViT with a trainable adapter at output stride 16 or 32."""
 
     def __init__(
         self,
@@ -200,6 +200,7 @@ class FrozenDINOv3ViT(BaseModule):
         amp_dtype="bfloat16",
         freeze=True,
         init_cfg=None,
+        output_stride=32,
     ):
         super().__init__(init_cfg=init_cfg)
         if variant not in DINOV3_VARIANTS:
@@ -213,6 +214,9 @@ class FrozenDINOv3ViT(BaseModule):
         if amp_dtype not in (None, "bfloat16", "float16", "float32"):
             raise ValueError("unsupported amp_dtype: {!r}".format(amp_dtype))
 
+        if output_stride not in (16, 32):
+            raise ValueError("output_stride must be 16 or 32")
+        self.output_stride = output_stride
         self.variant = variant
         self.checkpoint = os.path.abspath(os.path.expanduser(checkpoint))
         self._checkpoint_arg = checkpoint
@@ -229,7 +233,7 @@ class FrozenDINOv3ViT(BaseModule):
                 out_channels,
                 out_channels,
                 kernel_size=3,
-                stride=2,
+                stride=output_stride // 16,
                 padding=1,
                 bias=False,
             ),

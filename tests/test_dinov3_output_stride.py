@@ -16,6 +16,15 @@ class StrideContract(unittest.TestCase):
  def test_checkpoint_shapes_compatible(self):
   a=self.make();b=self.make(output_stride=16);b.load_state_dict(a.state_dict(),strict=True)
   self.assertEqual(sum(p.numel() for p in a.parameters()),sum(p.numel() for p in b.parameters()))
+ def test_config_and_pixel_geometry(self):
+  from pathlib import Path
+  from mmcv import Config
+  from adzoo.drivetransformer.mmdet3d_plugin.ours.utils import locations
+  root=Path(__file__).resolve().parents[1]
+  cfg=Config.fromfile(str(root/'adzoo/drivetransformer/configs/drivetransformer/drivetransformer_vitb_frozen_nomap_res480_stride16_p1_10ep.py'))
+  self.assertEqual(cfg.model.img_backbone.output_stride,16);self.assertEqual(cfg.model.pts_bbox_head.img_stride,16)
+  pixel=locations((30,60),torch.device('cpu'),cfg.model.pts_bbox_head.img_stride,480,960)*torch.tensor([960.,480.])
+  torch.testing.assert_close(pixel[0,0],torch.tensor([8.,8.]));torch.testing.assert_close(pixel[-1,-1],torch.tensor([952.,472.]))
  def test_unsupported_stride_rejected(self):
   for value in [8,24,64]:
    with self.assertRaises(ValueError):self.make(output_stride=value)

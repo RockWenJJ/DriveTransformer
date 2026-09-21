@@ -1,0 +1,23 @@
+No apex.normalization!!!!
+validated 25
+validated 50
+{
+  "train": {
+    "frames": 30,
+    "original_instances": 1128,
+    "removed_exact_duplicates": 326,
+    "fixed_instances": 818,
+    "fixed_frames_over_50": 4,
+    "fixed_frames_over_100": 1,
+    "max_geometry_error_m": 0.0
+  },
+  "val": {
+    "frames": 27,
+    "original_instances": 982,
+    "removed_exact_duplicates": 290,
+    "fixed_instances": 703,
+    "fixed_frames_over_50": 2,
+    "fixed_frames_over_100": 0,
+    "max_geometry_error_m": 0.0
+  }
+}

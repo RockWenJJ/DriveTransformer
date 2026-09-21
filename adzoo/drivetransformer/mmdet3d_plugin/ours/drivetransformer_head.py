@@ -398,7 +398,6 @@ class DriveTransformerlHead(BaseModule):
         self.transformer = build_transformer(transformer)
         self.init_output_head()
         self.reset_memory()
-        self.pseudo_map_instance = None
         self.pseudo_agent_instance = None
         self.img_patch_location = None
         
@@ -1135,7 +1134,7 @@ class DriveTransformerlHead(BaseModule):
         else:
             assigned_shift = order_index[sampling_result.pos_inds, sampling_result.pos_assigned_gt_inds]
         pts_targets = pts_pred.new_zeros((pts_pred.size(0),
-                        pts_pred.size(1), pts_pred.size(2)))
+                        gt_shifts_pts.size(-2), pts_pred.size(2)))
         pts_weights = torch.zeros_like(pts_targets)
         pts_weights[pos_inds] = 1.0
         # DETR
@@ -1638,6 +1637,25 @@ class DriveTransformerlHead(BaseModule):
             loss_cls = loss_cls[0]  #tensor[1] -> num
         return loss_cls, loss_pts, loss_dir
 
+    def _prepare_map_gt(self, vectors, labels, device):
+        """Keep genuinely empty annotated scenes as background-only targets."""
+        patterns = {'v0': 'shift_fixed_num_sampled_points',
+                    'v1': 'shift_fixed_num_sampled_points_v1',
+                    'v2': 'shift_fixed_num_sampled_points_v2',
+                    'v3': 'shift_fixed_num_sampled_points_v3',
+                    'v4': 'shift_fixed_num_sampled_points_v4'}
+        if self.map_gt_shift_pts_pattern not in patterns:
+            raise NotImplementedError(self.map_gt_shift_pts_pattern)
+        boxes, shifts = [], []
+        for vector, label in zip(vectors, labels):
+            if len(label) == 0:
+                boxes.append(torch.empty((0, 4), device=device))
+                shifts.append(torch.empty((0, 1, self.map_num_pts_per_gt_vec, 2), device=device))
+            else:
+                boxes.append(vector.bbox.to(device))
+                shifts.append(getattr(vector, patterns[self.map_gt_shift_pts_pattern]).to(device))
+        return boxes, shifts
+
     @force_fp32()
     def loss(self,
              gt_bboxes_list,
@@ -1670,8 +1688,6 @@ class DriveTransformerlHead(BaseModule):
         assert gt_bboxes_ignore is None, \
             f'{self.__class__.__name__} only supports ' \
             f'for gt_bboxes_ignore setting to None.'
-
-        map_gt_vecs_list = copy.deepcopy(map_gt_bboxes_list)
 
         all_cls_scores = preds_dicts['all_cls_scores']
         all_bbox_preds = preds_dicts['all_bbox_preds']
@@ -1729,46 +1745,14 @@ class DriveTransformerlHead(BaseModule):
         l0_agent_loss_cls_all, l0_aggent_loss_bbox_all = self.loss_single_box_only(agent_pre_cls_scores, agent_pre_coord_preds, all_gt_bboxes_list[0], all_gt_labels_list[0], all_gt_bboxes_mask[0])
 
         num_dec_layers = len(map_all_cls_scores)
-        device = map_gt_labels_list[0].device
-
-        # randomly grab a pseudo map_bbox_instance
-        if self.pseudo_map_instance is None:
-            for i in range(len(map_gt_labels_list)):
-                if len(map_gt_labels_list[i]) != 0:
-                    self.pseudo_map_instance = [map_gt_vecs_list[i], map_gt_labels_list[i]]
-                    break
-            assert self.pseudo_map_instance is not None
-        new_map_gt_bboxes_list = []
-        map_gt_pts_list = []
-        map_gt_shifts_pts_list = []
-        map_loss_gt_mask = torch.ones(len(map_gt_vecs_list), device=device)
-        for i, map_gt_labels in enumerate(map_gt_labels_list):
-            # if there is no gt, mask the corresponding loss, and use the pseudo map instance
-            if len(map_gt_labels) == 0:
-                map_loss_gt_mask[i] = 0
-                new_map_gt_bboxes_list.append(self.pseudo_map_instance[0].bbox.to(device))
-                map_gt_pts_list.append(self.pseudo_map_instance[0].fixed_num_sampled_points.to(device))
-                map_gt_shifts_pts_list.append(self.pseudo_map_instance[0].shift_fixed_num_sampled_points.to(device))
-                map_gt_labels_list[i] = self.pseudo_map_instance[1].to(device)
-            else :
-                new_map_gt_bboxes_list.append(map_gt_bboxes_list[i].bbox.to(device))
-                map_gt_pts_list.append(map_gt_bboxes_list[i].fixed_num_sampled_points.to(device))
-                if self.map_gt_shift_pts_pattern == 'v0':
-                    map_gt_shifts_pts_list.append(map_gt_bboxes_list[i].shift_fixed_num_sampled_points.to(device))
-                elif self.map_gt_shift_pts_pattern == 'v1':
-                    map_gt_shifts_pts_list.append(map_gt_bboxes_list[i].shift_fixed_num_sampled_points_v1.to(device))
-                elif self.map_gt_shift_pts_pattern == 'v2':
-                    map_gt_shifts_pts_list.append(map_gt_bboxes_list[i].shift_fixed_num_sampled_points_v2.to(device))
-                elif self.map_gt_shift_pts_pattern == 'v3':
-                    map_gt_shifts_pts_list.append(map_gt_bboxes_list[i].shift_fixed_num_sampled_points_v3.to(device))
-                elif self.map_gt_shift_pts_pattern == 'v4':
-                    map_gt_shifts_pts_list.append(map_gt_bboxes_list[i].shift_fixed_num_sampled_points_v4.to(device))
-                else:
-                    raise NotImplementedError
+        device = map_all_cls_scores.device
+        map_gt_labels_list = [labels.to(device=device, dtype=torch.long) for labels in map_gt_labels_list]
+        new_map_gt_bboxes_list, map_gt_shifts_pts_list = self._prepare_map_gt(
+            map_gt_bboxes_list, map_gt_labels_list, device)
+        map_loss_gt_mask = torch.ones(len(map_gt_bboxes_list), device=device)
 
         map_all_gt_bboxes_list = [new_map_gt_bboxes_list for _ in range(num_dec_layers)]
         map_all_gt_labels_list = [map_gt_labels_list for _ in range(num_dec_layers)]
-        map_all_gt_pts_list = [map_gt_pts_list for _ in range(num_dec_layers)]
         map_all_gt_shifts_pts_list = [map_gt_shifts_pts_list for _ in range(num_dec_layers)]
         map_all_gt_bboxes_ignore_list = [
             map_gt_bboxes_ignore for _ in range(num_dec_layers)

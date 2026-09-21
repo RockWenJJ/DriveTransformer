@@ -19,6 +19,10 @@ class MapNMSFreeCoder(BaseBBoxCoder):
         max_num (int): Max number to be kept. Default: 100.
         score_threshold (float): Threshold to filter boxes based on score.
             Default: None.
+        unique_queries (bool): Retain only the highest scoring label per query.
+            Default False preserves the original flattened ranking.
+        adaptive_score_threshold (bool): Reproduce the legacy fallback that
+            lowers the threshold until a prediction survives. Default False.
         code_size (int): Code size of bboxes. Default: 9
     """
 
@@ -28,13 +32,17 @@ class MapNMSFreeCoder(BaseBBoxCoder):
                  post_center_range=None,
                  max_num=100,
                  score_threshold=None,
-                 num_classes=10):
+                 num_classes=10,
+                 unique_queries=False,
+                 adaptive_score_threshold=False):
         self.pc_range = pc_range
         self.voxel_size = voxel_size
         self.post_center_range = post_center_range
         self.max_num = max_num
         self.score_threshold = score_threshold
         self.num_classes = num_classes
+        self.unique_queries = unique_queries
+        self.adaptive_score_threshold = adaptive_score_threshold
 
     def encode(self):
 
@@ -57,9 +65,16 @@ class MapNMSFreeCoder(BaseBBoxCoder):
         max_num = self.max_num
 
         cls_scores = cls_scores.sigmoid()
-        scores, indexs = cls_scores.view(-1).topk(max_num)
-        labels = indexs % self.num_classes
-        bbox_index = indexs // self.num_classes
+        if self.unique_queries:
+            # One semantic label per query; do not spend the output budget on
+            # several class hypotheses for exactly the same predicted line.
+            query_scores, query_labels = cls_scores.max(dim=-1)
+            scores, bbox_index = query_scores.topk(min(max_num, query_scores.numel()))
+            labels = query_labels[bbox_index]
+        else:
+            scores, indexs = cls_scores.reshape(-1).topk(min(max_num, cls_scores.numel()))
+            labels = indexs % self.num_classes
+            bbox_index = indexs // self.num_classes
         bbox_preds = bbox_preds[bbox_index]
         pts_preds = pts_preds[bbox_index]
        
@@ -73,7 +88,7 @@ class MapNMSFreeCoder(BaseBBoxCoder):
         if self.score_threshold is not None:
             thresh_mask = final_scores > self.score_threshold
             tmp_score = self.score_threshold
-            while thresh_mask.sum() == 0:
+            while self.adaptive_score_threshold and final_scores.numel() and thresh_mask.sum() == 0:
                 tmp_score *= 0.9
                 if tmp_score < 0.01:
                     thresh_mask = final_scores > -1
@@ -81,12 +96,12 @@ class MapNMSFreeCoder(BaseBBoxCoder):
                 thresh_mask = final_scores >= tmp_score
 
         if self.post_center_range is not None:
-            self.post_center_range = torch.tensor(
+            post_center_range = torch.as_tensor(
                 self.post_center_range, device=scores.device)
-            mask = (final_box_preds[..., :4] >= self.post_center_range[:4]).all(1)
-            mask &= (final_box_preds[..., :4] <= self.post_center_range[4:]).all(1)
+            mask = (final_box_preds[..., :4] >= post_center_range[:4]).all(1)
+            mask &= (final_box_preds[..., :4] <= post_center_range[4:]).all(1)
 
-            if self.score_threshold:
+            if self.score_threshold is not None:
                 mask &= thresh_mask
 
             boxes3d = final_box_preds[mask]

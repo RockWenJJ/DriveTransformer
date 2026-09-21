@@ -13,3 +13,5 @@ from .drivetransformer_layers import (
 )
 
 from .no_map import NoMapHead, NoMapDriveTransformer
+
+from .no_motion import NoMapNoMotionHead, NoMapNoMotionDriveTransformer

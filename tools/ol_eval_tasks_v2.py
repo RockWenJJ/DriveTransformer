@@ -243,6 +243,7 @@ def main():
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--stream-mode", choices=["clip", "legacy-window"], default="clip")
     p.add_argument("--map-score-threshold", type=float, default=0.0)
+    p.add_argument("--skip-map", action="store_true", help="Only for models with zero map queries; omit unavailable map metrics")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--allow-partial-checkpoint", action="store_true")
@@ -259,6 +260,8 @@ def main():
         importlib.import_module(mod)
 
     model = build_model(cfg.model, train_cfg=cfg.get("train_cfg"), test_cfg=cfg.get("test_cfg"))
+    if args.skip_map and getattr(model.pts_bbox_head, "map_num_query", None) != 0:
+        raise ValueError("--skip-map requires a model with zero map queries")
     ckpt = torch.load(args.ckpt, map_location="cpu")["state_dict"]
     new_state = {}
     for k, v in ckpt.items():
@@ -301,10 +304,11 @@ def main():
         attr = d["gt_attr_labels"].data
         labels = d["gt_labels_3d"].data.numpy() if torch.is_tensor(d["gt_labels_3d"].data) \
             else np.asarray(d["gt_labels_3d"].data)
-        map_gt = d["map_gt_bboxes_3d"].data
-        map_gt_pts = map_gt.fixed_num_sampled_points.numpy() \
-            if torch.is_tensor(map_gt.fixed_num_sampled_points) else np.asarray(map_gt.fixed_num_sampled_points)
-        map_gt_lab = d["map_gt_labels_3d"].data.numpy()
+        if not args.skip_map:
+            map_gt = d["map_gt_bboxes_3d"].data
+            map_gt_pts = map_gt.fixed_num_sampled_points.numpy() \
+                if torch.is_tensor(map_gt.fixed_num_sampled_points) else np.asarray(map_gt.fixed_num_sampled_points)
+            map_gt_lab = d["map_gt_labels_3d"].data.numpy()
 
         meta = dict(d["img_metas"].data)
         token = meta["scene_token"]
@@ -373,15 +377,16 @@ def main():
                 fde_all.append(float(mode_fde.min()))
 
         # ---------- mapping ----------
-        mp = out["map_pts_3d"]
-        pred_map_pts = mp.numpy() if torch.is_tensor(mp) and mp.dim() == 3 else None
-        if pred_map_pts is not None:
-            pred_map_lab = out["map_labels_3d"].numpy()
-            keep = out["map_scores_3d"].numpy() >= args.map_score_threshold
-            pred_map_pts, pred_map_lab = pred_map_pts[keep], pred_map_lab[keep]
-            for c, v in map_iou_per_class(map_gt_pts, map_gt_lab,
-                                          pred_map_pts, pred_map_lab).items():
-                iou_acc[c].append(v)
+        if not args.skip_map:
+            mp = out["map_pts_3d"]
+            pred_map_pts = mp.numpy() if torch.is_tensor(mp) and mp.dim() == 3 else None
+            if pred_map_pts is not None:
+                pred_map_lab = out["map_labels_3d"].numpy()
+                keep = out["map_scores_3d"].numpy() >= args.map_score_threshold
+                pred_map_pts, pred_map_lab = pred_map_pts[keep], pred_map_lab[keep]
+                for c, v in map_iou_per_class(map_gt_pts, map_gt_lab,
+                                              pred_map_pts, pred_map_lab).items():
+                    iou_acc[c].append(v)
 
         if (i + 1) % 200 == 0:
             el = time.time() - t0
@@ -394,6 +399,8 @@ def main():
            "protocol": {"version": "task-proxy-v2", "classes": list(ds.CLASSES),
                         "stream_mode": args.stream_mode, "seed": args.seed,
                         "map_score_threshold": args.map_score_threshold,
+                        "evaluated_tasks": ["planning", "detection", "motion"] + ([] if args.skip_map else ["mapping"]),
+                        "map_task": "not_applicable_no_map_queries" if args.skip_map else "evaluated",
                         "inference_contract": contract,
                         "dataset_timestamp_frame_period_s": ds.timestamp_frame_period_s,
                         "dataset_ego_accel_mode": ds.ego_accel_mode,
@@ -432,7 +439,8 @@ def main():
         if iou_acc[c]:
             m[f"map/iou_{c}"] = float(np.mean(iou_acc[c]))
     ious = [np.mean(v) for v in iou_acc.values() if v]
-    m["map/iou_avg"] = float(np.mean(ious)) if ious else None
+    if not args.skip_map:
+        m["map/iou_avg"] = float(np.mean(ious)) if ious else None
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:

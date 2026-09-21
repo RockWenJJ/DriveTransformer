@@ -11,4 +11,4 @@ work_dir = './adzoo/drivetransformer/work_dirs/vitb_frozen_nomap_res480_p1_10ep'
 log_config = dict(interval=50, hooks=[dict(type='TextLoggerHook'), dict(type='TensorboardLoggerHook'),
     dict(type='WandbLoggerHook', init_kwargs=dict(project='DriveTransformer',
     name='dt_base_dinov3_vitb16_frozen_p1fix_res480x960_no_map_10ep',
-    id='vitb-frozen-nomap-res480-p1-10ep-20260918', resume='never'))])
+    resume='never'))])

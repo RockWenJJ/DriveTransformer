@@ -21,5 +21,5 @@ custom_hooks = []
 log_config = dict(interval=50, hooks=[dict(type='TextLoggerHook'),
     dict(type='TensorboardLoggerHook'), dict(type='WandbLoggerHook',
     init_kwargs=dict(project='DriveTransformer', name='dt_base_p1fix_res480x960_10ep',
-                     id='p1-res480x960-10ep-20260914', resume='never'))])
-work_dir = '/data5T/wenjj/Projects/DriveTransformer_worktrees/res480_p1_train_20260914/train'
+                     resume='never'))])
+work_dir = './adzoo/drivetransformer/work_dirs/res480x960_p1_10ep'

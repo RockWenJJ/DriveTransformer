@@ -172,7 +172,15 @@ class DINOv3ViT(nn.Module):
         angles = angles.flatten(1, 2).repeat(1, 2)
         return angles.cos().to(dtype=dtype), angles.sin().to(dtype=dtype)
 
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, out_indices=None):
+        # None preserves the original final-layer tensor API. Requested layers
+        # are zero-based; every tap uses the same pretrained output LayerNorm.
+        if out_indices is not None:
+            out_indices = tuple(out_indices)
+            if (not out_indices or any(type(i) is not int for i in out_indices)
+                    or tuple(sorted(set(out_indices))) != out_indices
+                    or out_indices[0] < 0 or out_indices[-1] >= len(self.layer)):
+                raise ValueError('out_indices must be unique increasing layer indices')
         hidden_states = self.embeddings(pixel_values)
         cos, sin = self._rope(
             pixel_values.shape[-2],
@@ -182,8 +190,13 @@ class DINOv3ViT(nn.Module):
         )
         cos = cos[None, None]
         sin = sin[None, None]
-        for layer in self.layer:
+        intermediates = []
+        for index, layer in enumerate(self.layer):
             hidden_states = layer(hidden_states, cos, sin)
+            if out_indices is not None and index in out_indices:
+                intermediates.append(self.norm(hidden_states))
+        if out_indices is not None:
+            return tuple(intermediates)
         return self.norm(hidden_states)
 
 
@@ -201,6 +214,7 @@ class FrozenDINOv3ViT(BaseModule):
         freeze=True,
         init_cfg=None,
         output_stride=32,
+        out_indices=None,
     ):
         super().__init__(init_cfg=init_cfg)
         if variant not in DINOV3_VARIANTS:
@@ -224,9 +238,18 @@ class FrozenDINOv3ViT(BaseModule):
         self.amp_dtype = amp_dtype
         variant_cfg = DINOV3_VARIANTS[variant]
         self.dinov3 = DINOv3ViT(**variant_cfg)
+        self.out_indices = None if out_indices is None else tuple(out_indices)
+        if self.out_indices is not None:
+            if (not self.out_indices
+                    or any(type(i) is not int for i in self.out_indices)
+                    or tuple(sorted(set(self.out_indices))) != self.out_indices
+                    or self.out_indices[0] < 0
+                    or self.out_indices[-1] >= len(self.dinov3.layer)):
+                raise ValueError('out_indices must be unique increasing layer indices')
         hidden_size = variant_cfg["hidden_size"]
+        input_channels = hidden_size * (1 if self.out_indices is None else len(self.out_indices))
         self.adapter = nn.Sequential(
-            nn.Conv2d(hidden_size, out_channels, kernel_size=1, bias=False),
+            nn.Conv2d(input_channels, out_channels, kernel_size=1, bias=False),
             nn.GroupNorm(32, out_channels),
             nn.GELU(),
             nn.Conv2d(
@@ -321,7 +344,11 @@ class FrozenDINOv3ViT(BaseModule):
             for start in range(0, pixel_values.shape[0], self.forward_chunk_size):
                 chunk = pixel_values[start : start + self.forward_chunk_size]
                 with torch.cuda.amp.autocast(enabled=autocast, dtype=run_dtype):
-                    tokens = self.dinov3(chunk.to(run_dtype))
+                    tokens = self.dinov3(chunk.to(run_dtype), out_indices=self.out_indices)
+                if self.out_indices is not None:
+                    # Concatenate features at matching spatial positions, not
+                    # along the token dimension. Prefix tokens are stripped below.
+                    tokens = torch.cat(tokens, dim=-1)
                 tokens = tokens[:, 1 + self.dinov3.num_register_tokens :]
                 features = tokens.transpose(1, 2).reshape(
                     chunk.shape[0],
@@ -333,4 +360,3 @@ class FrozenDINOv3ViT(BaseModule):
 
         features = self.adapter(torch.cat(patch_features, dim=0))
         return (features,)
-

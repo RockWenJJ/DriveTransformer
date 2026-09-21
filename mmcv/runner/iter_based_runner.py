@@ -219,10 +219,12 @@ class IterBasedRunner(BaseRunner):
         if self.meta is not None:
             meta.update(self.meta)
             # Note: meta.update(self.meta) should be done before
-            # meta.update(epoch=self.epoch + 1, iter=self.iter) otherwise
+            # meta.update(epoch=self.epoch + 1, iter=self.iter + 1) otherwise
             # there will be problems with resumed checkpoints.
             # More details in https://github.com/open-mmlab/mmcv/pull/1108
-        meta.update(epoch=self.epoch + 1, iter=self.iter)
+        # Called by after_train_iter, after the optimizer update but before
+        # train() increments _iter. Persist completed updates, as in filename.
+        meta.update(epoch=self.epoch + 1, iter=self.iter + 1)
 
         filename = filename_tmpl.format(self.iter + 1)
         filepath = osp.join(out_dir, filename)

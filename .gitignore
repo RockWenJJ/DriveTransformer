@@ -170,3 +170,6 @@ data/bench2drive/
 eval_videos/
 eval_report.html
 work_dirs/
+
+# Local readiness evidence and disposable validation checkpoints.
+/preparation/

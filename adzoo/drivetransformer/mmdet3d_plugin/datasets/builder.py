@@ -97,6 +97,12 @@ def build_dataloader(dataset,
         sampler = None
 
 
+    if (runner_type['type'] == 'IterBasedRunner' and shuffle
+            and shuffler_sampler['type'] == 'RandomShortRouteBatchSampler'):
+        if not dist:
+            raise ValueError('RandomShortRouteBatchSampler requires distributed loader wiring')
+        batch_sampler, batch_size, sampler = sampler, 1, None
+
     init_fn = partial(
         worker_init_fn, num_workers=num_workers, rank=rank,
         seed=seed) if seed is not None else None

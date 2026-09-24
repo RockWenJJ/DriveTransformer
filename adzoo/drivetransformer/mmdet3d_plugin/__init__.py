@@ -7,3 +7,5 @@ from .models.backbones import *
 
 from .datasets import  CustomFormatBundle3D
 from .ours import *
+
+from .continuation import *

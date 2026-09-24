@@ -97,8 +97,9 @@ def build_dataloader(dataset,
         sampler = None
 
 
-    if (runner_type['type'] == 'IterBasedRunner' and shuffle
-            and shuffler_sampler['type'] == 'RandomShortRouteBatchSampler'):
+    if (shuffle and (runner_type['type'], shuffler_sampler['type']) in (
+            ('IterBasedRunner', 'RandomShortRouteBatchSampler'),
+            ('Random60ContinuationRunner', 'ContinuationRandomShortRouteBatchSampler'))):
         if not dist:
             raise ValueError('RandomShortRouteBatchSampler requires distributed loader wiring')
         batch_sampler, batch_size, sampler = sampler, 1, None

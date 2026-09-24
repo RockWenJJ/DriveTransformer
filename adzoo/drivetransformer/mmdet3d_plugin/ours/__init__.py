@@ -13,3 +13,4 @@ from .drivetransformer_layers import (
 )
 
 from .no_map import NoMapHead, NoMapDriveTransformer
+from .qwen_frozen_sem import FrozenQwenBackbone, QwenFrozenSemHead, QwenFrozenSemDriveTransformer

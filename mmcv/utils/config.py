@@ -420,7 +420,8 @@ class Config:
 
         def _format_basic_types(k, v, use_mapping=False):
             if isinstance(v, str):
-                v_str = f"'{v}'"
+                # Prompts may contain apostrophes, newlines and backslashes.
+                v_str = repr(v)
             else:
                 v_str = str(v)
 

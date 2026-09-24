@@ -279,6 +279,10 @@ class NoMapHead(DriveTransformerlHead):
                     ego_fut_preds_fix_time=torch.stack(times), ego_fut_preds_fix_dist=torch.stack(distances),
                     ego_traj_cls_scores=None, agent_pre_cls_scores=prep_cls, agent_pre_coord_preds=prep_box)
 
+    def _planning_features(self, features, layer_index):
+        """Optional planning-only conditioning; baseline is the identity."""
+        return features
+
     @auto_fp16()
     def _decode(self, agent, ego, agent_box, agent_cls, ego_ref, time_ref,
                 dist_ref, mode, image, image_pos, agent_history,
@@ -306,8 +310,9 @@ class NoMapHead(DriveTransformerlHead):
             agent_mode = agent.unsqueeze(2) + mode.unsqueeze(1)
             traj = self.traj_branches[i](agent_mode).view(bs, agent.shape[1], self.fut_mode, self.fut_ts, 2)
             traj_cls = self.traj_cls_branches[i](agent_mode)
-            t = self.ego_traj_branches_fix_time[i](ego+ego_pos).view(bs, 1, self.fut_ts_ego_fix_time, 2)
-            d = self.ego_traj_branches_fix_dist[i](ego+ego_pos).view(bs, 1, self.fut_ts_ego_fix_dist, 1)
+            planning = self._planning_features(ego + ego_pos, i)
+            t = self.ego_traj_branches_fix_time[i](planning).view(bs, 1, self.fut_ts_ego_fix_time, 2)
+            d = self.ego_traj_branches_fix_dist[i](planning).view(bs, 1, self.fut_ts_ego_fix_dist, 1)
             time_ref = t + time_ref if self.refine else t
             dist_ref = d + dist_ref if self.refine else d
             classes.append(agent_cls); boxes.append(agent_box); trajs.append(traj); traj_classes.append(traj_cls)
@@ -538,4 +543,3 @@ class NoMapDriveTransformer(DriveTransformer):
             bbox_results.append(bbox_result)
 
         return bbox_results
-

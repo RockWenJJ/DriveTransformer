@@ -328,7 +328,8 @@ def main():
     runner.timestamp = timestamp
     runner.register_training_hooks(cfg.lr_config, optimizer_config,
                                    cfg.checkpoint_config, cfg.log_config,
-                                   cfg.get('momentum_config', None))
+                                   cfg.get('momentum_config', None),
+                                   custom_hooks_config=cfg.get('custom_hooks', None))
     if distributed:
         if isinstance(runner, EpochBasedRunner):
             runner.register_hook(DistSamplerSeedHook())

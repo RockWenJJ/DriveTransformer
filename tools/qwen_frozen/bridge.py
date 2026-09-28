@@ -14,7 +14,8 @@ from protocol import send, receive
 
 
 class FrozenQwenClient:
-    def __init__(self, source, device, worker_python, timeout=600, **settings):
+    def __init__(self, source, device, worker_python, timeout=600,
+                 worker_script='worker.py', **settings):
         if device.type != 'cuda':
             raise ValueError('Qwen feature extraction requires a CUDA device')
         self.device = device
@@ -25,7 +26,7 @@ class FrozenQwenClient:
         self.arrays = {}
         self.log = (self.directory/'worker.log').open('w')
         try:
-            self.process = subprocess.Popen([worker_python, str(source/'worker.py'),
+            self.process = subprocess.Popen([worker_python, str(source/worker_script),
                 '--fd', str(peer.fileno()), '--parent', str(os.getpid()),
                 '--device', str(device), '--directory', str(self.directory)],
                 pass_fds=(peer.fileno(),), stdin=subprocess.DEVNULL,

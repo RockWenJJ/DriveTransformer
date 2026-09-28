@@ -24,6 +24,9 @@ class LearnTokenExtractor(FrozenExtractor):
         self.pending = {}
         self.current_token = None
         self.front_chunks = None
+        self.live_graphs = []
+        self.strategy = settings.get('backward_strategy', 'recompute')
+        assert self.strategy in ('recompute', 'retain')
         self.receipt.update(readout='appended learnable input token, final normalized hidden state',
                             gradient='recomputed first-order VJP to external FP32 token only')
 
@@ -50,6 +53,12 @@ class LearnTokenExtractor(FrozenExtractor):
         assert self.current_token is not None
         if self.front_chunks is not None:
             self.front_chunks.append(merged.detach().cpu())
+        if self.front_chunks is not None and self.strategy == 'retain':
+            with torch.enable_grad():
+                token = self.current_token.detach().requires_grad_(True)
+                output = self.token_language(merged.detach(), token, h, w).float()
+            self.live_graphs.append((output, token))
+            return output.detach()
         return self.token_language(merged, self.current_token, h, w)
 
     @torch.no_grad()
@@ -59,17 +68,19 @@ class LearnTokenExtractor(FrozenExtractor):
         token = torch.as_tensor(np.array(token, copy=True), device=self.device)
         assert token.shape == (1, 1, 1024) and bool(torch.isfinite(token).all())
         self.current_token = token
+        self.live_graphs = []
         self.front_chunks = [] if track else None
         try:
             visual, hidden = super().extract(image)
             if track:
                 self.pending[request_id] = dict(front=torch.cat(self.front_chunks),
                     token=token.cpu(), h=image.shape[-2], w=image.shape[-1],
-                    hidden=np.array(hidden, copy=True))
+                    hidden=np.array(hidden, copy=True), graphs=self.live_graphs)
             return visual, hidden
         finally:
             self.current_token = None
             self.front_chunks = None
+            self.live_graphs = []
 
     def token_vjp(self, request_id, gradient):
         assert request_id in self.pending, 'Unknown or already consumed token backward'
@@ -80,9 +91,13 @@ class LearnTokenExtractor(FrozenExtractor):
         chunk = self.settings['language_chunk']
         with torch.enable_grad():
             for start in range(0, len(saved['front']), chunk):
-                token = saved['token'].to(self.device).detach().requires_grad_(True)
-                front = saved['front'][start:start+chunk].to(self.device)
-                output = self.token_language(front, token, saved['h'], saved['w']).float()
+                if self.strategy == 'retain':
+                    output, token = saved['graphs'][start // chunk]
+                    front = None
+                else:
+                    token = saved['token'].to(self.device).detach().requires_grad_(True)
+                    front = saved['front'][start:start+chunk].to(self.device)
+                    output = self.token_language(front, token, saved['h'], saved['w']).float()
                 expected = torch.as_tensor(saved['hidden'][start:start+chunk], device=self.device)
                 error = float((output.detach() - expected).abs().max())
                 max_error = max(error, max_error)
@@ -94,7 +109,7 @@ class LearnTokenExtractor(FrozenExtractor):
                 del output, vjp, token, front, expected, upstream
         assert all(not p.requires_grad and p.grad is None for p in self.model.parameters())
         assert not self.model.training
-        self.last_vjp = dict(recompute_max_error=max_error, token_gradient_norm=float(total.norm()),
+        self.last_vjp = dict(backward_strategy=self.strategy, recompute_max_error=max_error, token_gradient_norm=float(total.norm()),
                              qwen_parameter_gradients=0, pending=len(self.pending))
         return total.cpu().numpy()
 

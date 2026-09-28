@@ -9,8 +9,10 @@ from .qwen_frozen_sem import FrozenQwenBackbone, QwenFrozenSemHead, QwenFrozenSe
 
 @BACKBONES.register_module()
 class LearnTokenQwenBackbone(FrozenQwenBackbone):
-    def __init__(self, *args, token_seed=0, **kwargs):
+    def __init__(self, *args, token_seed=0, backward_strategy='recompute', **kwargs):
         super().__init__(*args, **kwargs)
+        assert backward_strategy in ('recompute', 'retain')
+        self.settings['backward_strategy'] = backward_strategy
         # Private RNG leaves the pre-existing DT/adaptor initialization unchanged.
         generator = torch.Generator(device='cpu').manual_seed(token_seed)
         self.q_lang = nn.Parameter(torch.empty(1, 1, 1024).normal_(std=0.02, generator=generator))
@@ -82,3 +84,18 @@ class QwenTokenAuditHook(Hook):
             temporary = path.with_suffix('.tmp')
             temporary.write_text(json.dumps(value,indent=2)+'\n')
             temporary.replace(path)
+
+
+@HOOKS.register_module()
+class QwenPerfHook(Hook):
+    def after_train_iter(self, runner):
+        import json
+        import torch.distributed as dist
+        model = runner.model.module if hasattr(runner.model, 'module') else runner.model
+        client = model.img_backbone._client
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        row = dict(iter=runner.iter + 1, forward=client.last_stats,
+                   backward=client.last_backward_stats,
+                   parent_peak_bytes=torch.cuda.max_memory_allocated())
+        with (Path(runner.work_dir) / ('perf_rank%d.jsonl' % rank)).open('a') as stream:
+            stream.write(json.dumps(row) + '\n')

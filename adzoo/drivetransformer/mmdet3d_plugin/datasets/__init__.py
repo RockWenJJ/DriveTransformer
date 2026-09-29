@@ -12,3 +12,5 @@ __all__ = [
 ]
 
 from .random_short_routes import RandomShortRouteDataset, RandomShortRouteBatchSampler
+
+from .mixed_routes import MixedRouteDataset, MixedRouteBatchSampler

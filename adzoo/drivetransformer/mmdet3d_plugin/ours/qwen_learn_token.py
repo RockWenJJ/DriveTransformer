@@ -9,10 +9,12 @@ from .qwen_frozen_sem import FrozenQwenBackbone, QwenFrozenSemHead, QwenFrozenSe
 
 @BACKBONES.register_module()
 class LearnTokenQwenBackbone(FrozenQwenBackbone):
-    def __init__(self, *args, token_seed=0, backward_strategy='recompute', **kwargs):
+    def __init__(self, *args, token_seed=0, backward_strategy='recompute', batch_consistency='native', **kwargs):
         super().__init__(*args, **kwargs)
         assert backward_strategy in ('recompute', 'retain')
         self.settings['backward_strategy'] = backward_strategy
+        assert batch_consistency in ('native', 'single_sample_kernels')
+        self.settings['batch_consistency'] = batch_consistency
         # Private RNG leaves the pre-existing DT/adaptor initialization unchanged.
         generator = torch.Generator(device='cpu').manual_seed(token_seed)
         self.q_lang = nn.Parameter(torch.empty(1, 1, 1024).normal_(std=0.02, generator=generator))

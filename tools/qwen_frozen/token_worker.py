@@ -21,6 +21,12 @@ from worker import FrozenExtractor
 class LearnTokenExtractor(FrozenExtractor):
     def __init__(self, settings, device):
         super().__init__(settings, device)
+        self.batch_consistency = settings.get('batch_consistency', 'native')
+        assert self.batch_consistency in ('native', 'single_sample_kernels')
+        if self.batch_consistency == 'single_sample_kernels':
+            from stable_batch import install_language_batch_consistency
+            self.receipt['stable_batch'] = install_language_batch_consistency(self.model.language_model)
+        self.receipt['batch_consistency'] = self.batch_consistency
         self.pending = {}
         self.current_token = None
         self.front_chunks = None
@@ -37,7 +43,13 @@ class LearnTokenExtractor(FrozenExtractor):
         embeddings = self.model.get_input_embeddings()(ids)
         image_mask = inputs['mm_token_type_ids'].bool().unsqueeze(-1).expand_as(embeddings)
         embeddings = embeddings.masked_scatter(image_mask, merged.to(embeddings.dtype))
-        embeddings = torch.cat((embeddings, token.to(embeddings.dtype).expand(len(merged), -1, -1)), dim=1)
+        # Expand in FP32 before casting so shared-token gradients sum in FP32.
+        # Preserve the original path unless the consistency mode is enabled.
+        if self.batch_consistency == 'single_sample_kernels':
+            readout_token = token.expand(len(merged), -1, -1).to(embeddings.dtype)
+        else:
+            readout_token = token.to(embeddings.dtype).expand(len(merged), -1, -1)
+        embeddings = torch.cat((embeddings, readout_token), dim=1)
         mask = torch.cat((mask, torch.ones_like(mask[:, :1])), dim=1)
         # A text position follows the native multimodal prefix without shifting it.
         next_position = inputs['position_ids'].amax(dim=(0, 2)).view(1, -1, 1) + 1

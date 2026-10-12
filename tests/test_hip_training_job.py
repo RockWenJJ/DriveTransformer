@@ -62,6 +62,83 @@ class JobTests(unittest.TestCase):
         with self.assertRaises(job.GateError):
             job.predecessor_status(self.root, 'contract')
 
+    def stopped_spec(self):
+        checkpoint = self.root / 'preserved.pt'
+        checkpoint.write_bytes(b'preserved checkpoint audited independently')
+        receipt = self.put('preservation.json', dict(
+            mode='user_stopped', passed=True, user_authorized_stop=True,
+            user_request='Stop SDV2-Refiner, preserve its checkpoint, then train DT-HiP.',
+            original_root=str(self.root), checkpoint_path=str(checkpoint),
+            checkpoint_sha256=job.digest(checkpoint), strict_load=True, optimizer_present=True,
+            optimizer_finite=True, finite=True, contract_sha256='contract',
+            stopped_service=dict(name='example.service', ActiveState='inactive', MainPID='0')))
+        return dict(root=str(self.root), repository=str(self.root), python=sys.executable,
+                    predecessor=dict(mode='user_stopped', root=str(self.root), service='example.service',
+                                     contract_sha256='contract', preservation_receipt=str(receipt)),
+                    source_sha256={str(p): job.digest(p) for p in (checkpoint, receipt)})
+
+    def stopped_capture(self, argv, cpu=False):
+        if argv[0] == 'systemctl':
+            return 'ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=143'
+        if '--query-gpu=index,uuid' in argv:
+            return '0, GPU-a\n1, GPU-b\n2, GPU-c\n3, GPU-d'
+        return ''
+
+    def test_explicit_user_stop_admits_preserved_incomplete_checkpoint(self):
+        supervisor = job.Supervisor(self.stopped_spec())
+        self.put('job_state.json', {'phase': 'interrupted'})
+        with mock.patch.object(supervisor, 'capture', side_effect=self.stopped_capture):
+            supervisor.wait_resources()
+        self.assertEqual(supervisor.state['phase'], 'resources_ready')
+        self.assertEqual(supervisor.state['predecessor_mode'], 'user_stopped')
+        self.assertEqual(supervisor.state['predecessor_service']['ExecMainStatus'], '143')
+
+    def test_user_stop_rejects_changed_checkpoint_or_receipt(self):
+        for filename in ('preserved.pt', 'preservation.json'):
+            spec = self.stopped_spec()
+            (self.root / filename).write_bytes(b'changed')
+            with self.assertRaisesRegex(job.GateError, 'changed'):
+                job.user_stopped_predecessor(spec['predecessor'], spec['source_sha256'], self.root)
+
+    def test_user_stop_requires_hash_pins_for_both_artifacts(self):
+        for filename in ('preserved.pt', 'preservation.json'):
+            spec = self.stopped_spec()
+            del spec['source_sha256'][str(self.root / filename)]
+            with self.assertRaisesRegex(job.GateError, 'Unpinned'):
+                job.user_stopped_predecessor(spec['predecessor'], spec['source_sha256'], self.root)
+
+    def test_user_stop_rejects_missing_authorization_or_request(self):
+        for key in ('user_authorized_stop', 'user_request'):
+            spec = self.stopped_spec()
+            path = self.root / 'preservation.json'
+            receipt = job.read_json(path)
+            del receipt[key]
+            path.write_text(json.dumps(receipt))
+            spec['source_sha256'][str(path)] = job.digest(path)
+            with self.assertRaises(job.GateError):
+                job.user_stopped_predecessor(spec['predecessor'], spec['source_sha256'], self.root)
+
+    def test_user_stop_rejects_live_or_unknown_service(self):
+        for service in ('ActiveState=active\nMainPID=123', 'ActiveState=unknown\nMainPID=0',
+                        'ActiveState=inactive\nMainPID=123'):
+            supervisor = job.Supervisor(self.stopped_spec())
+            with mock.patch.object(supervisor, 'capture', return_value=service):
+                with self.assertRaisesRegex(job.GateError, 'not confirmed inactive'):
+                    supervisor.wait_resources()
+            self.assertNotEqual(supervisor.state['phase'], 'resources_ready')
+
+    def test_user_stop_still_waits_for_assigned_gpu_occupants(self):
+        supervisor = job.Supervisor(self.stopped_spec())
+        def capture(argv, cpu=False):
+            if '--query-compute-apps=gpu_uuid,pid,process_name' in argv:
+                return 'GPU-a, 123, unrelated_training'
+            return self.stopped_capture(argv, cpu)
+        with mock.patch.object(supervisor, 'capture', side_effect=capture), \
+                mock.patch.object(job.time, 'sleep', side_effect=job.Interrupted('test wait')):
+            with self.assertRaises(job.Interrupted):
+                supervisor.wait_resources()
+        self.assertEqual(supervisor.state['phase'], 'waiting_assigned_gpus')
+
     def test_busy_gpu_low_memory_still_busy(self):
         inventory = '0, GPU-a\n1, GPU-b\n2, GPU-c\n3, GPU-d\n4, GPU-e'
         self.assertEqual(job.gpu_occupants(inventory, 'GPU-a, 123, python'), [['GPU-a', '123', 'python']])

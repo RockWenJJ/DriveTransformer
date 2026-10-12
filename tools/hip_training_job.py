@@ -5,6 +5,8 @@ JSON spec: version=1, root, repository, python, code_sha, source_sha256, data_fi
 {absolute-or-repository-relative-path: sha256}, cpu_receipt, predecessor
 {root, service, contract_sha256}, config, smoke_config, train_dir, smoke_dir,
 stages {gpu_gate, smoke_train, smoke_checkpoint, train, final_checkpoint}.
+Predecessor mode defaults to completed. Explicit mode=user_stopped requires a
+preservation_receipt, with both receipt and preserved checkpoint hash-pinned.
 Each stage has argv (list; never shell), and gates have receipt. Placeholders:
 {root}, {repository}, {python}, {config}, {smoke_config}, {train_dir},
 {smoke_dir}, {checkpoint}, {expected_iterations}, {receipt}, {attempt}.
@@ -142,6 +144,55 @@ def predecessor_status(root, contract_sha):
     return True
 
 
+def user_stopped_predecessor(pred, pinned, repository):
+    """Accept explicit stop authorization and preserved weights, never completion."""
+    if pred.get('mode') != 'user_stopped':
+        raise GateError('Explicit user-stopped predecessor mode is required')
+    inventory = {}
+    for name, expected in pinned.items():
+        path = Path(name)
+        if not path.is_absolute():
+            path = Path(repository) / path
+        inventory[str(path.resolve())] = expected
+
+    def pinned_file(name, label):
+        if not isinstance(name, str) or not Path(name).is_absolute():
+            raise GateError('Missing absolute %s path' % label)
+        path = Path(name).resolve()
+        expected = inventory.get(str(path))
+        if expected is None:
+            raise GateError('Unpinned %s' % label)
+        if not path.is_file() or digest(path) != expected:
+            raise GateError('Pinned %s changed' % label)
+        return path, expected
+
+    receipt_path, receipt_sha = pinned_file(pred.get('preservation_receipt'), 'preservation receipt')
+    receipt = read_json(receipt_path)
+    for key in ('passed', 'user_authorized_stop', 'strict_load', 'optimizer_present',
+                'optimizer_finite', 'finite'):
+        if receipt.get(key) is not True:
+            raise GateError('Preservation receipt lacks true %s' % key)
+    if receipt.get('mode') != 'user_stopped':
+        raise GateError('Preservation receipt is not a user-stop authorization')
+    if not isinstance(receipt.get('user_request'), str) or not receipt['user_request'].strip():
+        raise GateError('Preservation receipt lacks the explicit user request')
+    original_root = receipt.get('original_root')
+    if (not isinstance(original_root, str) or not Path(original_root).is_absolute() or
+            Path(original_root).resolve() != Path(pred['root']).resolve()):
+        raise GateError('Preservation receipt predecessor root mismatch')
+    if receipt.get('contract_sha256') != pred['contract_sha256']:
+        raise GateError('Preserved checkpoint contract mismatch')
+    stopped = receipt.get('stopped_service', {})
+    if (stopped.get('name') != pred['service'] or stopped.get('ActiveState') != 'inactive' or
+            stopped.get('MainPID') != '0'):
+        raise GateError('Preservation receipt does not confirm the named service stopped')
+    checkpoint, checkpoint_sha = pinned_file(receipt.get('checkpoint_path'), 'preserved checkpoint')
+    if receipt.get('checkpoint_sha256') != checkpoint_sha:
+        raise GateError('Preserved checkpoint hash disagrees with the receipt')
+    return dict(receipt=receipt, receipt_path=str(receipt_path), receipt_sha256=receipt_sha,
+                checkpoint_path=str(checkpoint), checkpoint_sha256=checkpoint_sha)
+
+
 def gpu_occupants(inventory, processes, indexes=(0, 1, 2, 3)):
     ids = {}
     for row in csv.reader(io.StringIO(inventory)):
@@ -270,6 +321,11 @@ class Supervisor:
                 path = self.repo / path
             if str(path.resolve()) not in paths:
                 raise GateError('Unpinned data provenance file: %s' % path)
+        pred = s.get('predecessor', {})
+        if pred.get('mode', 'completed') not in ('completed', 'user_stopped'):
+            raise GateError('Unknown predecessor admission mode')
+        if pred.get('mode') == 'user_stopped':
+            user_stopped_predecessor(pred, pinned, self.repo)
         verify_receipt(s['cpu_receipt'], 'cpu', keys=s.get('cpu_receipt_keys'))
         for key in ('train_dir', 'smoke_dir'):
             path = Path(s[key]).resolve()
@@ -296,6 +352,10 @@ class Supervisor:
 
     def wait_resources(self):
         pred = self.spec['predecessor']
+        if pred.get('mode') == 'user_stopped':
+            return self.wait_user_stopped_resources()
+        if pred.get('mode', 'completed') != 'completed':
+            raise GateError('Unknown predecessor admission mode')
         while True:
             success = predecessor_status(pred['root'], pred['contract_sha256'])
             if not success:
@@ -326,6 +386,29 @@ class Supervisor:
                         self.emit('resources_ready')
                         return
                     self.emit('waiting_assigned_gpus', occupants=occupied)
+            time.sleep(min(60, max(1, self.spec.get('poll_seconds', 30))))
+
+    def wait_user_stopped_resources(self):
+        pred = self.spec['predecessor']
+        while True:
+            preservation = user_stopped_predecessor(pred, self.spec.get('source_sha256', {}), self.repo)
+            raw = self.capture(['systemctl', '--user', 'show', pred['service'], '-p', 'ActiveState',
+                                '-p', 'SubState', '-p', 'MainPID', '-p', 'ExecMainStatus'])
+            service = dict(line.split('=', 1) for line in raw.splitlines() if '=' in line)
+            # An intentional stop may have a nonzero exit status. Admission is
+            # instead bound to the explicit authorization and a live empty unit.
+            if service.get('ActiveState') != 'inactive' or service.get('MainPID') != '0':
+                raise GateError('User-stopped predecessor service is not confirmed inactive')
+            inventory = self.capture(['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader,nounits'])
+            processes = self.capture(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid,process_name',
+                                      '--format=csv,noheader,nounits'])
+            occupied = gpu_occupants(inventory, processes)
+            if not occupied:
+                self.state['predecessor_preservation'] = preservation
+                self.state['predecessor_service'] = service
+                self.emit('resources_ready', predecessor_mode='user_stopped')
+                return
+            self.emit('waiting_assigned_gpus', occupants=occupied, predecessor_mode='user_stopped')
             time.sleep(min(60, max(1, self.spec.get('poll_seconds', 30))))
 
     def stop_owned(self):

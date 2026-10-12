@@ -121,6 +121,8 @@ class DriveTransformer(MVXTwoStageDetector):
                       ego_fut_cmd=None,
                       ego_lcf_feat=None,
                       gt_attr_labels=None,
+                      hip_plan_targets=None,
+                      hip_plan_masks=None,
                       **data,
                       ):
         """Forward training function.
@@ -176,7 +178,9 @@ class DriveTransformer(MVXTwoStageDetector):
             gt_attr_labels=gt_attr_labels,
             ## Prediction
             preds_dicts=preds_dicts,
-            img_metas=img_metas
+            img_metas=img_metas,
+            hip_plan_targets=hip_plan_targets,
+            hip_plan_masks=hip_plan_masks,
         )
         return self._parse_losses(losses, num_samples=img.shape[0])
 
@@ -238,18 +242,22 @@ class DriveTransformer(MVXTwoStageDetector):
                 map_scores, map_labels, map_pts) in enumerate(bbox_list):
             bbox_result = bbox3d2result(bboxes, scores, labels)
             bbox_result['trajs_3d'] = trajs.cpu()
-            map_bbox_result = dict(
-            map_boxes_3d=map_bboxes.to('cpu'),
-            map_scores_3d=map_scores.cpu(),
-            map_labels_3d=map_labels.cpu(),
-            map_pts_3d=map_pts.to('cpu'))
-            bbox_result.update(map_bbox_result)
+            if self.pts_bbox_head.with_mapping:
+                map_bbox_result = dict(
+                    map_boxes_3d=map_bboxes.to('cpu'),
+                    map_scores_3d=map_scores.cpu(),
+                    map_labels_3d=map_labels.cpu(),
+                    map_pts_3d=map_pts.to('cpu'))
+                bbox_result.update(map_bbox_result)
             bbox_result['ego_fut_cmd'] = ego_fut_cmd.cpu()
             bbox_result['ego_fut_preds_fix_time'] = outs['ego_fut_preds_fix_time'][-1].cpu()
             if 'ego_traj_cls_scores' in outs and outs['ego_traj_cls_scores'] is not None:
                 bbox_result['ego_traj_cls_scores'] = outs['ego_traj_cls_scores'][-1].cpu()
             if 'ego_fut_preds_fix_dist' in outs and outs['ego_fut_preds_fix_dist'] is not None:
                 bbox_result['ego_fut_preds_fix_dist'] = outs['ego_fut_preds_fix_dist'][-1].cpu()
+            if 'hip_selected' in outs:
+                bbox_result['hip_planning'] = {
+                    key: value[i:i+1].cpu() for key, value in outs['hip_selected'].items()}
             bbox_results.append(bbox_result)
 
         return bbox_results

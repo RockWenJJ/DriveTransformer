@@ -13,6 +13,12 @@ class ResizeCropFlipImage(object):
         aug_config = results.get("aug_config")
         if aug_config is None:
             return results
+        if 'hip_plan_targets' in results and aug_config.get('rotate_3d', 0) != 0:
+            raise ValueError(
+                'HiP planning requires rot3d_range=[0, 0]: DriveTransformer '
+                'does not consistently rotate its 3D boxes, maps and projections. '
+                'Rotating only planning labels would corrupt supervision.'
+            )
         imgs = results["img"]
         N = len(imgs)
         new_imgs = []

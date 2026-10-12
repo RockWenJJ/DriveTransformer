@@ -1,4 +1,5 @@
 import copy
+from collections import OrderedDict
 import numpy as np
 import os
 from os import path as osp
@@ -21,6 +22,7 @@ from mmcv.datasets.pipelines import Compose
 from mmcv.datasets.map_utils.struct import LiDARInstanceLines
 from shapely.geometry import LineString, box
 from .map_utils.geometry import clip_map_line, deduplicate_map_lines
+from .hip_targets import HipRouteTargetCache
 import joblib
 import time
 from drivetransformer_contracts import acceleration_xy, frame_timestamp
@@ -53,6 +55,8 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
                  map_deduplicate=False, # Opt in for training; keep historical evaluation targets stable.
                  timestamp_frame_period_s=0.1,
                  ego_accel_mode='xy',
+                 hip_planning_targets=False,
+                 with_mapping=True,
                  *args,
                  **kwargs):
         
@@ -65,6 +69,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         self.sample_interval = sample_interval
         self.timestamp_frame_period_s = timestamp_frame_period_s
         self.ego_accel_mode = ego_accel_mode
+        self.hip_planning_targets = hip_planning_targets
+        self.with_mapping = with_mapping
+        self._hip_route_cache = OrderedDict()
+        self._hip_flat_route_bounds = None
         frame_timestamp(0, timestamp_frame_period_s)
         acceleration_xy(np.zeros(3), ego_accel_mode)
         self.past_frames = past_frames
@@ -86,8 +94,9 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         self.use_angle_as_dis_traj = use_angle_as_dis_traj
 
         map_start_time = time.time()    
-        with open(self.map_file,'rb') as f: 
-            self.map_infos = joblib.load(f)
+        if self.with_mapping:
+            with open(self.map_file, 'rb') as f:
+                self.map_infos = joblib.load(f)
         map_end_time = time.time()    
         print('loading map infos: '+str(map_end_time-map_start_time)+'s')
 
@@ -249,9 +258,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         input_dict["aug_config"] = aug_config
         self.pre_pipeline(input_dict)
         example = self.pipeline(input_dict)
-        gt_labels,gt_bboxes = self.get_map_info(index)
-        example['map_gt_labels_3d'] = DC(gt_labels, cpu_only=False)
-        example['map_gt_bboxes_3d'] = DC(gt_bboxes, cpu_only=True)
+        if self.with_mapping:
+            gt_labels, gt_bboxes = self.get_map_info(index)
+            example['map_gt_labels_3d'] = DC(gt_labels, cpu_only=False)
+            example['map_gt_bboxes_3d'] = DC(gt_bboxes, cpu_only=True)
         if self.filter_empty_gt and (example is None or ~(example['gt_labels_3d']._data != -1).any()):
             return None
             
@@ -270,9 +280,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         input_dict["aug_config"] = aug_config
         self.pre_pipeline(input_dict)
         example = self.pipeline(input_dict)
-        gt_labels,gt_bboxes = self.get_map_info(index)
-        example['map_gt_labels_3d'] = DC(gt_labels, cpu_only=False)
-        example['map_gt_bboxes_3d'] = DC(gt_bboxes, cpu_only=True) 
+        if self.with_mapping:
+            gt_labels, gt_bboxes = self.get_map_info(index)
+            example['map_gt_labels_3d'] = DC(gt_labels, cpu_only=False)
+            example['map_gt_bboxes_3d'] = DC(gt_bboxes, cpu_only=True)
         return example
 
 
@@ -433,6 +444,10 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
         input_dict['ego_fut_masks_fix_time'] = ego_fut_masks_fix_time
         input_dict['ego_fut_trajs_fix_dist'] = ego_fut_trajs_fix_dist
         input_dict['ego_fut_masks_fix_dist'] = ego_fut_masks_fix_dist
+        if getattr(self, 'hip_planning_targets', False):
+            hip_targets, hip_masks = self.get_hip_planning_targets(index)
+            input_dict['hip_plan_targets'] = hip_targets
+            input_dict['hip_plan_masks'] = hip_masks
         input_dict['ego_fut_cmd'] = command
         input_dict['ego_lcf_feat'] = ego_lcf_feat
         input_dict['fut_valid_flag_fix_time'] = input_dict['ego_fut_masks_fix_time'][-1]
@@ -720,6 +735,39 @@ class B2D_DriveTransformer_Dataset(Custom3DDataset):
             full_adj_mask[j] = 1
         full_adj_track[~full_adj_mask.astype(bool)] = 0
         return full_adj_track, full_adj_mask
+
+    def get_hip_planning_targets(self, index):
+        """Four six-point absolute XY label groups, strictly within a route.
+
+        This opt-in leaves all original DriveTransformer labels unchanged.
+        The image pipeline rejects nonzero rotate_3d while these targets are
+        present, since upstream DT does not rotate its other 3D labels.
+        """
+        if self.use_splited_data:
+            self.get_data_by_index(index)  # Select the requested route cache.
+            start, end = self.current_route_start_idx, self.current_route_end_idx
+            infos = self.current_route_data
+        else:
+            if self._hip_flat_route_bounds is None:
+                starts = [0]
+                for i in range(1, len(self.data_infos)):
+                    if self.data_infos[i]['folder'] != self.data_infos[i - 1]['folder']:
+                        starts.append(i)
+                self._hip_flat_route_bounds = np.array(starts + [len(self.data_infos)])
+            bounds = self._hip_flat_route_bounds
+            route = np.searchsorted(bounds, index, side='right') - 1
+            start, end = int(bounds[route]), int(bounds[route + 1])
+            infos = None
+        key = (start, end)
+        if key not in self._hip_route_cache:
+            if infos is None:
+                infos = self.data_infos[start:end]
+            self._hip_route_cache[key] = HipRouteTargetCache.from_infos(
+                infos, frame_period_s=self.timestamp_frame_period_s)
+            while len(self._hip_route_cache) > max(1, self.cache_lenth):
+                self._hip_route_cache.popitem(last=False)
+        self._hip_route_cache.move_to_end(key)
+        return self._hip_route_cache[key].targets(index - start)
 
     def get_box_attr_labels(self,idx,sample_rate,frames):
         # get attributes of boxes

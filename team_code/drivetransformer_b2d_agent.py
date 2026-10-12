@@ -26,6 +26,7 @@ from mmcv.parallel.collate import collate as  mm_collate_to_batch_form
 from mmcv.core.bbox import get_box_type
 from team_code.planner import RoutePlanner
 from pyquaternion import Quaternion
+from hip_planning_contracts import hip_control_paths
 from drivetransformer_contracts import (
     acceleration_xy, frame_timestamp, decode_fixed_distance,
     apply_attention_eval_policy,
@@ -521,12 +522,22 @@ class DriveTransformerAgent(autonomous_agent.AutonomousAgent):
             self.step_time_avg.pop(0)
         all_out_truck = None
         ego_traj_cls_scores = None
-        selected_mode = 0 
-        fixed_dist_values = output_data_batch[0]['ego_fut_preds_fix_dist'][0,selected_mode,:,0].float().cpu().numpy()
-        ego_traj_fix_dist, decode_diagnostics = decode_fixed_distance(
-            fixed_dist_values, self.inference_contract.get('fixed_dist_decoder', 'sin_heading'))
-        self.pid_metadata['fixed_dist_out_of_range_fraction'] = decode_diagnostics['out_of_range_fraction']
-        ego_traj_fix_time = output_data_batch[0]['ego_fut_preds_fix_time'][0,selected_mode,:,[1,0]].float().cpu().numpy() 
+        if 'hip_planning' in output_data_batch[0]:
+            native = output_data_batch[0]['hip_planning']
+            def native_numpy(name):
+                return native[name][0].float().cpu().numpy()
+            ego_traj_fix_time, ego_traj_fix_dist, decode_diagnostics = hip_control_paths(
+                native_numpy('plan_temp_5hz'), native_numpy('plan_spat_2m'),
+                native_numpy('plan_speed_5hz'), int(native['style_index'][0]))
+            self.pid_metadata['hip_planning'] = decode_diagnostics
+            self.pid_metadata['hip_mode'] = int(native['mode_index'][0])
+        else:
+            selected_mode = 0
+            fixed_dist_values = output_data_batch[0]['ego_fut_preds_fix_dist'][0,selected_mode,:,0].float().cpu().numpy()
+            ego_traj_fix_dist, decode_diagnostics = decode_fixed_distance(
+                fixed_dist_values, self.inference_contract.get('fixed_dist_decoder', 'sin_heading'))
+            self.pid_metadata['fixed_dist_out_of_range_fraction'] = decode_diagnostics['out_of_range_fraction']
+            ego_traj_fix_time = output_data_batch[0]['ego_fut_preds_fix_time'][0,selected_mode,:,[1,0]].float().cpu().numpy()
         if self.step <= 20: # waiting for scenerio initialization (cars are more likely to disappear suddenly in this period)
             steer, throttle, brake = 0.0, 0.0, 1.0
         else:

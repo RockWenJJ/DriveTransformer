@@ -579,6 +579,7 @@ class DriveTransformerDecoderLayer(BaseModule):
                  isolate_map_task_attn=False,
                  cross_task_temporal_attn=False,
                  directed_gated_cross_task_temporal_attn=False,
+                 with_mapping=True,
                  **kwargs):
 
         deprecated_args = dict(
@@ -597,6 +598,7 @@ class DriveTransformerDecoderLayer(BaseModule):
         super().__init__(init_cfg)
 
         self.batch_first = batch_first
+        self.with_mapping = with_mapping
         self.agent_query_num = agent_query_num
         self.map_query_num = map_query_num
         self.memory_len_frame = memory_len_frame
@@ -607,6 +609,8 @@ class DriveTransformerDecoderLayer(BaseModule):
         self.cross_task_temporal_attn = cross_task_temporal_attn
         self.directed_gated_cross_task_temporal_attn = \
             directed_gated_cross_task_temporal_attn
+        if not with_mapping and directed_gated_cross_task_temporal_attn:
+            raise ValueError('Directed map temporal edges require with_mapping=True')
         if (self.cross_task_temporal_attn and
                 self.directed_gated_cross_task_temporal_attn):
             raise ValueError(
@@ -647,8 +651,9 @@ class DriveTransformerDecoderLayer(BaseModule):
                     assert self.batch_first == attn_cfgs[index]['batch_first']
                 else:
                     attn_cfgs[index]['batch_first'] = self.batch_first
-                for _ in range(3):
-                    attention = build_attention(attn_cfgs[index])
+                for task_index in range(3):
+                    attention = (build_attention(attn_cfgs[index])
+                                 if with_mapping or task_index != 1 else nn.Identity())
                     attention.operation_name = operation_name
                     self.temporal_cross_attention_layers.append(attention)
                 if self.directed_gated_cross_task_temporal_attn:
@@ -692,7 +697,8 @@ class DriveTransformerDecoderLayer(BaseModule):
             self.directed_cross_temporal_gates = None
             self.directed_cross_source_embeddings = None
         self.cross_w_q = nn.ModuleList(
-                [nn.Sequential(nn.LayerNorm(self.embed_dims), nn.Linear(self.embed_dims, self.embed_dims)) for _ in range(3)]
+                [nn.Sequential(nn.LayerNorm(self.embed_dims), nn.Linear(self.embed_dims, self.embed_dims))
+                 if with_mapping or task_index != 1 else nn.Identity() for task_index in range(3)]
             )
 
         self.ffns = ModuleList()
@@ -709,7 +715,8 @@ class DriveTransformerDecoderLayer(BaseModule):
                 assert ffn_cfgs[ffn_index]['embed_dims'] == self.embed_dims
             self.ffns.append(
                 nn.ModuleList(
-                [build_feedforward_network(ffn_cfgs[ffn_index], dict(type='FFN')) for _ in range(3)]
+                [build_feedforward_network(ffn_cfgs[ffn_index], dict(type='FFN'))
+                 if with_mapping or task_index != 1 else nn.Identity() for task_index in range(3)]
                 )
                 )
         self.use_checkpoint = with_cp
@@ -825,6 +832,9 @@ class DriveTransformerDecoderLayer(BaseModule):
             out_queries = []
             task_names = ("agent", "map", "ego")
             for i in range(3):
+                if not self.with_mapping and i == 1:
+                    out_queries.append(queries[i])
+                    continue
                 unified_attn_mask = torch.cat([
                     torch.zeros((queries[i].shape[0], queries[i].shape[1], 1)).bool().to(queries[i].device),
                     invalid.unsqueeze(1).expand(-1, queries[i].shape[1], -1),
@@ -846,6 +856,9 @@ class DriveTransformerDecoderLayer(BaseModule):
         task_names = ("agent", "map", "ego")
         # temporal attention for each query
         for i in range(3):
+            if not self.with_mapping and i == 1:
+                out_queries.append(queries[i])
+                continue
             with attention_label(f"temporal/own/{task_names[i]}"):
                 out_queries.append(
                     self.temporal_cross_attention_layers[i](
@@ -860,7 +873,14 @@ class DriveTransformerDecoderLayer(BaseModule):
         return torch.cat(out_queries, dim=1)
     
     
-    @auto_fp16()
+    # Preserve HiP projection matrices and anchor geometry in float32.
+    @auto_fp16(apply_to=(
+        'agent_query', 'map_query', 'ego_query', 'img_feats',
+        'img_pos_embed', 'agent_temp_memory', 'agent_temp_pos', 'map_temp_memory',
+        'map_temp_pos', 'ego_temp_memory', 'ego_temp_pos', 'agent_pos_embed',
+        'map_pts_pos_embed', 'map_ins_pos_embed', 'ego_pos_embed', 'attn_masks',
+        'temp_attn_masks',
+    ))
     def _forward(self,
                 agent_query, # agent query, [B, N_agent_query, D] 
                 map_query, # map query, [B, N_map_query, D]
@@ -879,6 +899,9 @@ class DriveTransformerDecoderLayer(BaseModule):
                 ego_pos_embed, # ego position embedding
                 attn_masks=None,  # attention mask 
                 temp_attn_masks=None, # temproral attention mask
+                hip_context=None,
+                hip_anchors=None,
+                hip_layer_idx=None,
                 **kwargs):
 
         norm_index = 0
@@ -907,7 +930,7 @@ class DriveTransformerDecoderLayer(BaseModule):
         pos = torch.cat([agent_pos_embed, map_ins_pos_embed, ego_pos_embed], dim=1) # [B, N_agent_query+N_map_query+N_ego_mode, D] 
         for layer in self.operation_order:
             if layer == 'task_self_attn': # task self attention
-                if self.isolate_map_task_attn:
+                if self.isolate_map_task_attn and self.with_mapping:
                     # map queries only attend to map queries, while agent / ego
                     # queries still attend to all queries. Two calls of the SAME
                     # attention module are used instead of a dense [B, N, N]
@@ -966,26 +989,41 @@ class DriveTransformerDecoderLayer(BaseModule):
                 map_query = map_query.unsqueeze(2).expand(-1, -1, self.map_pts_per_vec, -1).flatten(1, 2) # [B, N_map_query*points_per_line, D]
                 identity = torch.cat([agent_query, map_query, ego_query], dim=1)
                 agent_query = self.cross_w_q[0](agent_query + agent_pos_embed)
-                if map_pts_pos_embed is not None:
+                if self.with_mapping and map_pts_pos_embed is not None:
                     map_query = self.cross_w_q[1](map_query + map_pts_pos_embed) 
-                ego_query = self.cross_w_q[2](ego_query + ego_pos_embed)
-                with attention_label(
-                        f"sensor/layer{sensor_cross_attn_index}"
-                        f"/A{agent_query_num}_M{map_query.shape[1]}_E{ego_query.shape[1]}"):
-                    query = self.sensor_cross_attentions[sensor_cross_attn_index](
-                        torch.cat([agent_query, map_query, ego_query], dim=1),
-                        img_feats,
-                        img_feats,
-                        identity,
-                        query_pos=None,
-                        key_pos=img_pos_embed,
-                        **kwargs)
+                if hip_context is None:
+                    ego_query = self.cross_w_q[2](ego_query + ego_pos_embed)
+                    with attention_label(
+                            f"sensor/layer{sensor_cross_attn_index}"
+                            f"/A{agent_query_num}_M{map_query.shape[1]}_E{ego_query.shape[1]}"):
+                        query = self.sensor_cross_attentions[sensor_cross_attn_index](
+                            torch.cat([agent_query, map_query, ego_query], dim=1),
+                            img_feats,
+                            img_feats,
+                            identity,
+                            query_pos=None,
+                            key_pos=img_pos_embed,
+                            **kwargs)
+                else:
+                    # DT detection/map sensor attention is unchanged. Only the
+                    # planning image-reading path is replaced by waypoint PDA.
+                    perception = self.sensor_cross_attentions[sensor_cross_attn_index](
+                        torch.cat([agent_query, map_query], dim=1),
+                        img_feats, img_feats,
+                        identity[:, :agent_query_num + map_query.shape[1]],
+                        query_pos=None, key_pos=img_pos_embed, **kwargs)
+                    ego_query = hip_context['planner'].image_attention(
+                        hip_layer_idx, ego_query, ego_pos_embed, hip_anchors,
+                        hip_context['feature_map'], hip_context['lidar2img'],
+                        hip_context['image_hw'])
+                    query = torch.cat([perception, ego_query], dim=1)
                 sensor_cross_attn_index += 1
                 attn_index += 1
             elif layer == 'ffn': # separated ffn for each part of query
                 agent_query, map_query, ego_query = agent_map_ego_split(query, agent_query_num, map_query_num * self.map_pts_per_vec, dim=1)
                 agent_query = self.ffns[ffn_index][0](agent_query)
-                map_query = self.ffns[ffn_index][1](map_query)
+                if self.with_mapping:
+                    map_query = self.ffns[ffn_index][1](map_query)
                 ego_query = self.ffns[ffn_index][2](ego_query)
                 ffn_index += 1
                 return agent_query, map_query, ego_query
@@ -997,7 +1035,11 @@ class DriveTransformerDecoderLayer(BaseModule):
         if self.use_checkpoint and self.training:
             # Older torch checkpoint only accepts positional inputs; capture
             # the decoder's keyword-only masks in a closure.
-            if kwargs:
+            if kwargs.get('hip_context') is not None:
+                # PDA also differentiates the feature map in hip_context.
+                # Non-reentrant checkpointing records keyword/nested inputs.
+                x = cp.checkpoint(self._forward, *args, use_reentrant=False, **kwargs)
+            elif kwargs:
                 forward_with_kwargs = partial(self._forward, **kwargs)
                 x = cp.checkpoint(forward_with_kwargs, *args)
             else:
@@ -1019,6 +1061,7 @@ class DriveTransformerDecoder(TransformerLayerSequence):
                  fut_mode=None,
                  embed_dims=None,
                  refine=False,
+                 with_mapping=True,
                  **kwargs):
         
         super(DriveTransformerDecoder, self).__init__(*args, **kwargs)
@@ -1034,8 +1077,21 @@ class DriveTransformerDecoder(TransformerLayerSequence):
         self.fp16_enabled = False
         self.embed_dims = embed_dims
         self.refine = refine
+        self.with_mapping = with_mapping
 
-    @auto_fp16()
+    # Preserve HiP projection matrices and anchor geometry in float32.
+    @auto_fp16(apply_to=(
+        'agent_query', 'map_query', 'ego_query', 'img_feats',
+        'img_pos_embed', 'agent_temp_memory', 'agent_temp_pos', 'map_temp_memory',
+        'map_temp_pos', 'ego_temp_memory', 'ego_temp_pos', 'agent_ref',
+        'map_ref', 'map_pts_coord', 'ego_ref', 'agent_traj_ref',
+        'ego_traj_ref_fix_time', 'ego_traj_ref_fix_dist', 'mode_query', 'agent_cls',
+        'map_cls', 'agent_ref_embedding', 'agent_cls_embedding', 'map_ref_embedding',
+        'map_cls_embedding', 'ego_pos_embedding', 'ego_traj_ref_fix_time_embedding', 'ego_traj_ref_fix_dist_embedding',
+        'reg_branches', 'cls_branches', 'traj_branches', 'traj_cls_branches',
+        'map_reg_branches', 'map_cls_branches', 'attn_mask', 'temp_attn_masks',
+        'ego_traj_branches_fix_dist', 'ego_traj_branches_fix_time', 'ego_traj_cls_branches',
+    ))
     def forward(
             self,
             agent_query, # agent query, [B, N_agent_query, D] 
@@ -1077,6 +1133,7 @@ class DriveTransformerDecoder(TransformerLayerSequence):
             ego_traj_branches_fix_dist=None, # regression head for planning (fixed distance interval form)
             ego_traj_branches_fix_time=None, # regression head for planning (fixed time interval form)
             ego_traj_cls_branches=None, # classification head for planning
+            hip_context=None,
         ):
         bs = agent_query.shape[0]
         intermediate_agent_traj_coords = []
@@ -1089,24 +1146,36 @@ class DriveTransformerDecoder(TransformerLayerSequence):
         intermediate_ego_traj_fix_dist = []
         intermediate_ego_traj_fix_time = []
         intermediate_ego_class = []
+        hip_preds, hip_modes, hip_styles = [], [], []
+        hip_anchors = hip_context['anchors'] if hip_context is not None else None
         cur_agent_pred = agent_ref.clone()
         agent_ref = agent_ref[..., [0, 1, 4]] #(x,y,z)
         for lid, layer in enumerate(self.layers):
             # position embeddings
             ego_pos_embed = ego_pos_embedding(pos2posemb(ego_ref.detach(), self.embed_dims//2))
             agent_pos_embed = agent_ref_embedding(pos2posemb(agent_ref.detach(), self.embed_dims//2))
-            map_ins_pos_embed = map_ref_embedding(pos2posemb(map_ref.detach(), self.embed_dims//2))
-            ego_pos_embed += ego_traj_ref_fix_time_embedding(pos2posemb(ego_traj_ref_fix_time.detach().flatten(-2, -1), 32))
-            if ego_traj_ref_fix_dist is not None:
-                ego_pos_embed += ego_traj_ref_fix_dist_embedding(pos2posemb(ego_traj_ref_fix_dist.detach().flatten(-2, -1), 32))
+            map_ins_pos_embed = (map_ref_embedding(pos2posemb(map_ref.detach(), self.embed_dims//2))
+                                 if self.with_mapping else map_query)
+            if hip_context is None:
+                ego_pos_embed += ego_traj_ref_fix_time_embedding(pos2posemb(ego_traj_ref_fix_time.detach().flatten(-2, -1), 32))
+                if ego_traj_ref_fix_dist is not None:
+                    ego_pos_embed += ego_traj_ref_fix_dist_embedding(pos2posemb(ego_traj_ref_fix_dist.detach().flatten(-2, -1), 32))
+            else:
+                ego_pos_embed = hip_context['planner'].position(hip_anchors.detach())
             agent_pos_cls_embed = agent_pos_embed + agent_cls_embedding(agent_cls.detach())
-            map_class_embed = map_cls_embedding(map_cls.detach())
-            map_ins_pos_embed = map_ins_pos_embed + map_class_embed
-            map_pts_pos_embed = (map_ref_embedding(pos2posemb(map_pts_coord.detach(), self.embed_dims//2)) + map_class_embed.unsqueeze(-2)).flatten(1, 2)
+            if self.with_mapping:
+                map_class_embed = map_cls_embedding(map_cls.detach())
+                map_ins_pos_embed = map_ins_pos_embed + map_class_embed
+                map_pts_pos_embed = (map_ref_embedding(pos2posemb(map_pts_coord.detach(), self.embed_dims//2)) + map_class_embed.unsqueeze(-2)).flatten(1, 2)
+            else:
+                map_pts_pos_embed = None
             # major attention layer: task self attention, temporal cross attention, sensor cross attention
             agent_query, map_query, ego_query = layer(agent_query, map_query, ego_query, img_feats, img_pos_embed, 
                 agent_temp_memory, agent_temp_pos, map_temp_memory, map_temp_pos, ego_temp_memory, ego_temp_pos,
-                agent_pos_cls_embed, map_pts_pos_embed, map_ins_pos_embed, ego_pos_embed, attn_mask, temp_attn_masks=temp_attn_masks)
+                agent_pos_cls_embed, map_pts_pos_embed, map_ins_pos_embed, ego_pos_embed,
+                attn_mask, temp_attn_masks=temp_attn_masks, hip_context=hip_context,
+                hip_anchors=hip_anchors.detach() if hip_anchors is not None else None,
+                hip_layer_idx=lid)
             # task heads
             # detection 
             agent_cls = cls_branches[lid](agent_query) 
@@ -1127,28 +1196,47 @@ class DriveTransformerDecoder(TransformerLayerSequence):
             agent_traj_cls = traj_cls_branches[lid](agent_query_mode)
             intermediate_agent_traj_cls.append(agent_traj_cls)
             intermediate_agent_traj_coords.append(agent_traj_ref)
-            # online mapping
-            if self.refine: # coarse-to-fine optimization
-                map_pts_coord = map_reg_branches[lid](map_query + map_pts_pos_embed).view(*map_pts_coord.shape) + map_pts_coord
+            if self.with_mapping:
+                # online mapping
+                if self.refine: # coarse-to-fine optimization
+                    map_pts_coord = map_reg_branches[lid](map_query + map_pts_pos_embed).view(*map_pts_coord.shape) + map_pts_coord
+                else:
+                    map_pts_coord = map_reg_branches[lid](map_query + map_pts_pos_embed).view(*map_pts_coord.shape)
+                _, map_ref  = map_transform_box(map_pts_coord.unsqueeze(0))
+                intermediate_map_coords.append(map_pts_coord)
+                map_query = map_query.view(map_pts_coord.shape[0], map_pts_coord.shape[1], map_pts_coord.shape[2], self.embed_dims)
+                map_query = map_query.mean(-2)
+                map_cls = map_cls_branches[lid](map_query)
+                intermediate_map_class.append(map_cls)
             else:
-                map_pts_coord = map_reg_branches[lid](map_query + map_pts_pos_embed).view(*map_pts_coord.shape)
-            _, map_ref  = map_transform_box(map_pts_coord.unsqueeze(0))
-            intermediate_map_coords.append(map_pts_coord)
-            map_query = map_query.view(map_pts_coord.shape[0], map_pts_coord.shape[1], map_pts_coord.shape[2], self.embed_dims)
-            map_query = map_query.mean(-2)
-            map_cls = map_cls_branches[lid](map_query)
-            intermediate_map_class.append(map_cls)
-            # planning
-            if self.refine: 
-                ego_traj_ref_fix_dist = ego_traj_branches_fix_dist[lid](ego_query + ego_pos_embed).unsqueeze(-1) + ego_traj_ref_fix_dist if ego_traj_branches_fix_dist is not None else None
-                ego_traj_ref_fix_time = ego_traj_branches_fix_time[lid](ego_query + ego_pos_embed).reshape(bs,ego_query.shape[1], -1, 2) + ego_traj_ref_fix_time
+                intermediate_map_coords.append(map_pts_coord)
+                intermediate_map_class.append(map_cls)
+            if hip_context is not None:
+                hip_anchors, mode_logits, style_logits = hip_context['planner'].refine(
+                    lid, ego_query, ego_pos_embed, hip_anchors)
+                hip_preds.append(hip_anchors.reshape(bs, 10, 48, 6, 2))
+                hip_modes.append(mode_logits)
+                hip_styles.append(style_logits)
+                intermediate_ego_traj_fix_time.append(None)
+                intermediate_ego_traj_fix_dist.append(None)
+                intermediate_ego_class.append(None)
             else:
-                ego_traj_ref_fix_dist = ego_traj_branches_fix_dist[lid](ego_query + ego_pos_embed).unsqueeze(-1) if ego_traj_branches_fix_dist is not None else None
-                ego_traj_ref_fix_time = ego_traj_branches_fix_time[lid](ego_query + ego_pos_embed).reshape(bs,ego_query.shape[1], -1, 2)
-            ego_traj_cls = ego_traj_cls_branches[lid](ego_query + ego_pos_embed) if ego_traj_cls_branches is not None else None
-            intermediate_ego_traj_fix_time.append(ego_traj_ref_fix_time)
-            intermediate_ego_traj_fix_dist.append(ego_traj_ref_fix_dist)
-            intermediate_ego_class.append(ego_traj_cls)
+                # planning
+                if self.refine:
+                    ego_traj_ref_fix_dist = ego_traj_branches_fix_dist[lid](ego_query + ego_pos_embed).unsqueeze(-1) + ego_traj_ref_fix_dist if ego_traj_branches_fix_dist is not None else None
+                    ego_traj_ref_fix_time = ego_traj_branches_fix_time[lid](ego_query + ego_pos_embed).reshape(bs,ego_query.shape[1], -1, 2) + ego_traj_ref_fix_time
+                else:
+                    ego_traj_ref_fix_dist = ego_traj_branches_fix_dist[lid](ego_query + ego_pos_embed).unsqueeze(-1) if ego_traj_branches_fix_dist is not None else None
+                    ego_traj_ref_fix_time = ego_traj_branches_fix_time[lid](ego_query + ego_pos_embed).reshape(bs,ego_query.shape[1], -1, 2)
+                ego_traj_cls = ego_traj_cls_branches[lid](ego_query + ego_pos_embed) if ego_traj_cls_branches is not None else None
+                intermediate_ego_traj_fix_time.append(ego_traj_ref_fix_time)
+                intermediate_ego_traj_fix_dist.append(ego_traj_ref_fix_dist)
+                intermediate_ego_class.append(ego_traj_cls)
+
+        if hip_context is not None:
+            hip_context.update(preds=torch.stack(hip_preds),
+                               mode_logits=torch.stack(hip_modes),
+                               style_logits=torch.stack(hip_styles))
 
         return agent_query, map_query, ego_query, \
             (intermediate_agent_traj_coords,

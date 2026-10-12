@@ -124,10 +124,13 @@ class DriveTransformerlHead(BaseModule):
         fut_ts_ego_fix_dist=None,
         fut_ts_ego_fix_time=None,
         fut_ego_fix_dist=False,
+        hip_planner=None,
+        with_mapping=True,
     ):
     
         super().__init__()
         self.fp16_enabled = False
+        self.with_mapping = with_mapping
         
         # Hyper-Parameter
         ## Model Size
@@ -136,7 +139,7 @@ class DriveTransformerlHead(BaseModule):
         self.embed_dims = embed_dims
         self.memory_len_frame = memory_len_frame
         self.agent_num_propagated = agent_num_propagated
-        self.map_num_propagated = map_num_propagated
+        self.map_num_propagated = map_num_propagated if with_mapping else 0
         self.num_cls_fcs = num_cls_fcs
         self.num_reg_fcs = num_reg_fcs
         ## Det & Motion
@@ -175,8 +178,8 @@ class DriveTransformerlHead(BaseModule):
             self.sampler = build_sampler(sampler_cfg, context=self)
         
         ## Online Mapping
-        self.map_num_query = map_num_query
-        self.map_num_query_sifted = map_num_query_sifted
+        self.map_num_query = map_num_query if with_mapping else 0
+        self.map_num_query_sifted = map_num_query_sifted if with_mapping else 0
         self.map_num_classes = map_num_classes
         self.map_num_pts_per_vec = map_num_pts_per_vec
         self.map_num_pts_per_gt_vec = map_num_pts_per_gt_vec
@@ -193,7 +196,7 @@ class DriveTransformerlHead(BaseModule):
         self.map_code_weights = map_code_weights
         self.map_code_weights = nn.Parameter(torch.tensor(
             self.map_code_weights, requires_grad=False), requires_grad=False)
-        if train_cfg is not None:
+        if train_cfg is not None and self.with_mapping:
             map_assigner = train_cfg['map_assigner']
             assert loss_map_cls['loss_weight'] == map_assigner['cls_cost']['weight'], \
                 'The classification weight for loss and matcher should be' \
@@ -266,9 +269,9 @@ class DriveTransformerlHead(BaseModule):
             self.bg_cls_weight = bg_cls_weight
         
         ## Online Mapping Loss
-        self.loss_map_cls = build_loss(loss_map_cls)
-        self.loss_map_pts = build_loss(loss_map_pts)
-        self.loss_map_dir = build_loss(loss_map_dir)
+        self.loss_map_cls = build_loss(loss_map_cls) if self.with_mapping else None
+        self.loss_map_pts = build_loss(loss_map_pts) if self.with_mapping else None
+        self.loss_map_dir = build_loss(loss_map_dir) if self.with_mapping else None
         self.map_bg_cls_weight = 0
         map_class_weight = loss_map_cls.get('class_weight', None)
         if map_class_weight is not None:
@@ -288,7 +291,7 @@ class DriveTransformerlHead(BaseModule):
             if 'bg_cls_weight' in loss_map_cls:
                 loss_map_cls.pop('bg_cls_weight')
             self.map_bg_cls_weight = map_bg_cls_weight
-        self.map_bbox_coder = build_bbox_coder(map_bbox_coder)
+        self.map_bbox_coder = build_bbox_coder(map_bbox_coder) if self.with_mapping else None
         ## Planning Loss
         self.loss_plan_reg_fix_dist = build_loss(loss_plan_reg_fix_dist)
         self.loss_plan_reg_fix_time = build_loss(loss_plan_reg_fix_time)
@@ -325,24 +328,28 @@ class DriveTransformerlHead(BaseModule):
             
         self.mode_embedding = nn.Embedding(self.fut_mode, self.embed_dims)
         ## Online Mapping
-        self.map_query = nn.Embedding(self.map_num_query, self.embed_dims)
-        self.map_query.requires_grad_(False)       
-        self.map_reference_points = nn.Embedding(self.map_num_query, 2)
-        self.map_reference_points.requires_grad_(False)
-        self.map_cls_embedding = nn.Sequential(
-            nn.Linear(self.map_num_classes, self.embed_dims),
-            nn.SiLU(inplace=True),
-            nn.Linear(self.embed_dims, self.embed_dims),
-            nn.SiLU(inplace=True),
-            nn.Linear(self.embed_dims, self.embed_dims),
-        ) # Map Cls PE
-        self.map_ref_embedding = nn.Sequential(
-            nn.Linear(self.embed_dims, self.embed_dims),
-            nn.SiLU(inplace=True),
-            nn.Linear(self.embed_dims, self.embed_dims),
-            nn.SiLU(inplace=True),
-            nn.Linear(self.embed_dims, self.embed_dims)
-        ) # Map Reg PE
+        if self.with_mapping:
+            self.map_query = nn.Embedding(self.map_num_query, self.embed_dims)
+            self.map_query.requires_grad_(False)
+            self.map_reference_points = nn.Embedding(self.map_num_query, 2)
+            self.map_reference_points.requires_grad_(False)
+            self.map_cls_embedding = nn.Sequential(
+                nn.Linear(self.map_num_classes, self.embed_dims),
+                nn.SiLU(inplace=True),
+                nn.Linear(self.embed_dims, self.embed_dims),
+                nn.SiLU(inplace=True),
+                nn.Linear(self.embed_dims, self.embed_dims),
+            ) # Map Cls PE
+            self.map_ref_embedding = nn.Sequential(
+                nn.Linear(self.embed_dims, self.embed_dims),
+                nn.SiLU(inplace=True),
+                nn.Linear(self.embed_dims, self.embed_dims),
+                nn.SiLU(inplace=True),
+                nn.Linear(self.embed_dims, self.embed_dims)
+            ) # Map Reg PE
+        else:
+            self.map_query = self.map_reference_points = None
+            self.map_cls_embedding = self.map_ref_embedding = None
         ## Planning
         self.ego_lcf_encoder = nn.Sequential(
             nn.Linear(len(self.ego_lcf_feat_idx) + 2*2 + self.ego_command_dim, self.embed_dims, bias=True),
@@ -392,13 +399,38 @@ class DriveTransformerlHead(BaseModule):
         self.agent_prep_decoder = agent_prep_decoder
         self.map_prep_decoder = map_prep_decoder
         self.agent_prep_decoder = build_transformer_layer_sequence(agent_prep_decoder)
-        self.map_prep_decoder = build_transformer_layer_sequence(map_prep_decoder)
+        self.map_prep_decoder = build_transformer_layer_sequence(map_prep_decoder) if self.with_mapping else None
 
         ## Major Layer
+        if not self.with_mapping:
+            transformer = copy.deepcopy(transformer)
+            decoder_cfg = transformer['decoder']
+            decoder_cfg['with_mapping'] = False
+            decoder_cfg['map_num_query'] = 0
+            layer_cfgs = decoder_cfg['transformerlayers']
+            if isinstance(layer_cfgs, dict):
+                layer_cfgs = [layer_cfgs]
+            for layer_cfg in layer_cfgs:
+                layer_cfg.update(with_mapping=False, map_query_num=0,
+                                 map_num_propagated=0)
         self.transformer = build_transformer(transformer)
         self.init_output_head()
         self.reset_memory()
         self.pseudo_agent_instance = None
+        self.hip_planner = None
+        if hip_planner is not None:
+            from .hip_planner import HipPlanner
+            self.hip_planner = HipPlanner(
+                embed_dims=self.embed_dims,
+                num_layers=len(self.transformer.decoder.layers), **hip_planner)
+            # The hybrid replaces these legacy planning-only parameters.
+            # Detection/motion and the ego context encoder stay trainable.
+            for name in ('ego_traj_branches_fix_time', 'ego_traj_branches_fix_dist',
+                         'ego_traj_cls_branches', 'ego_traj_ref_fix_time_embedding',
+                         'ego_traj_ref_fix_dist_embedding'):
+                setattr(self, name, None)
+            for layer in self.transformer.decoder.layers:
+                layer.cross_w_q[2] = nn.Identity()
         self.img_patch_location = None
         
 
@@ -439,21 +471,22 @@ class DriveTransformerlHead(BaseModule):
         traj_cls_branch = nn.Sequential(*traj_cls_branch)
         traj_cls_branch.apply(self.xavier_uniform_linear)
 
-        map_cls_branch = [nn.LayerNorm(self.embed_dims)]
-        for _ in range(self.num_cls_fcs):
-            map_cls_branch.append(Linear(self.embed_dims, self.embed_dims))
-            map_cls_branch.append(nn.SiLU(inplace=True))
-        map_cls_branch.append(Linear(self.embed_dims, self.map_cls_out_channels, bias=False))
-        map_cls_branch = nn.Sequential(*map_cls_branch)
-        map_cls_branch.apply(self.xavier_uniform_linear)
+        if self.with_mapping:
+            map_cls_branch = [nn.LayerNorm(self.embed_dims)]
+            for _ in range(self.num_cls_fcs):
+                map_cls_branch.append(Linear(self.embed_dims, self.embed_dims))
+                map_cls_branch.append(nn.SiLU(inplace=True))
+            map_cls_branch.append(Linear(self.embed_dims, self.map_cls_out_channels, bias=False))
+            map_cls_branch = nn.Sequential(*map_cls_branch)
+            map_cls_branch.apply(self.xavier_uniform_linear)
 
-        map_reg_branch = [nn.LayerNorm(self.embed_dims)]
-        for _ in range(self.num_reg_fcs):
-            map_reg_branch.append(Linear(self.embed_dims, self.embed_dims))
-            map_reg_branch.append(nn.SiLU(inplace=True))
-        map_reg_branch.append(Linear(self.embed_dims, self.map_code_size))
-        map_reg_branch = nn.Sequential(*map_reg_branch)
-        map_reg_branch.apply(self.xavier_uniform_linear)
+            map_reg_branch = [nn.LayerNorm(self.embed_dims)]
+            for _ in range(self.num_reg_fcs):
+                map_reg_branch.append(Linear(self.embed_dims, self.embed_dims))
+                map_reg_branch.append(nn.SiLU(inplace=True))
+            map_reg_branch.append(Linear(self.embed_dims, self.map_code_size))
+            map_reg_branch = nn.Sequential(*map_reg_branch)
+            map_reg_branch.apply(self.xavier_uniform_linear)
         
         if self.fut_ego_fix_dist:
             ego_traj_branch_fix_dist = [nn.LayerNorm(self.embed_dims)]
@@ -488,9 +521,12 @@ class DriveTransformerlHead(BaseModule):
         self.reg_branches = _get_clones(reg_branch, num_pred)
         self.traj_branches = _get_clones(traj_branch, motion_num_pred)
         self.traj_cls_branches = _get_clones(traj_cls_branch, motion_num_pred)
-        self.map_cls_branches = _get_clones(map_cls_branch, map_num_pred)
-        self.map_reg_branches = _get_clones(map_reg_branch, map_num_pred)
-        self.map_reg_branches[-1] = nn.Linear(self.embed_dims, self.map_code_size * self.map_num_pts_per_vec)
+        if self.with_mapping:
+            self.map_cls_branches = _get_clones(map_cls_branch, map_num_pred)
+            self.map_reg_branches = _get_clones(map_reg_branch, map_num_pred)
+            self.map_reg_branches[-1] = nn.Linear(self.embed_dims, self.map_code_size * self.map_num_pts_per_vec)
+        else:
+            self.map_cls_branches = self.map_reg_branches = None
         self.ego_traj_branches_fix_dist = _get_clones(ego_traj_branch_fix_dist, ego_num_pred) if self.fut_ego_fix_dist else None
         self.ego_traj_branches_fix_time = _get_clones(ego_traj_branch_fix_time, ego_num_pred)
         self.ego_traj_cls_branches = _get_clones(ego_traj_cls_branch, ego_num_pred) if self.ego_multi_modal else None
@@ -512,9 +548,11 @@ class DriveTransformerlHead(BaseModule):
     def init_weights(self):
         #self.mode_mlp.apply(self.xavier_uniform_linear)
         self.agent_cls_embedding.apply(self.xavier_uniform_linear)
-        self.map_cls_embedding.apply(self.xavier_uniform_linear)
+        if self.with_mapping:
+            self.map_cls_embedding.apply(self.xavier_uniform_linear)
         self.agent_ref_embedding.apply(self.xavier_uniform_linear)
-        self.map_ref_embedding.apply(self.xavier_uniform_linear)
+        if self.with_mapping:
+            self.map_ref_embedding.apply(self.xavier_uniform_linear)
         self.featurized_pe.apply(self.xavier_uniform_linear)
         self.spatial_alignment.apply(self.xavier_uniform_linear)
         self.time_embedding.apply(self.xavier_uniform_linear)
@@ -533,14 +571,15 @@ class DriveTransformerlHead(BaseModule):
             self.agent_reference_points.weight[..., 2] = 0.0
         nn.init.constant_(self.agent_query.weight, 0)
         
-        num_grid_per_dim_map = int(np.sqrt(self.map_reference_points.weight.shape[0]))
-        xs = torch.linspace(self.pc_range[0], self.pc_range[3], steps=num_grid_per_dim_map)
-        ys = torch.linspace(self.pc_range[1], self.pc_range[4], steps=num_grid_per_dim_map)
-        x, y = torch.meshgrid(xs, ys, indexing='xy')
-        with torch.no_grad():
-            self.map_reference_points.weight[..., 0] = x.flatten()
-            self.map_reference_points.weight[..., 1] = y.flatten()
-        nn.init.constant_(self.map_query.weight, 0)
+        if self.with_mapping:
+            num_grid_per_dim_map = int(np.sqrt(self.map_reference_points.weight.shape[0]))
+            xs = torch.linspace(self.pc_range[0], self.pc_range[3], steps=num_grid_per_dim_map)
+            ys = torch.linspace(self.pc_range[1], self.pc_range[4], steps=num_grid_per_dim_map)
+            x, y = torch.meshgrid(xs, ys, indexing='xy')
+            with torch.no_grad():
+                self.map_reference_points.weight[..., 0] = x.flatten()
+                self.map_reference_points.weight[..., 1] = y.flatten()
+            nn.init.constant_(self.map_query.weight, 0)
 
     @force_fp32()
     def forward(self,
@@ -556,6 +595,7 @@ class DriveTransformerlHead(BaseModule):
         self.pre_update_memory(data)
         ## Img
         bs, num_cam, C, H, W = img_feats.shape
+        hip_feature_map = img_feats if self.hip_planner is not None else None
         dtype = img_feats.dtype
         ## PETR 3D Pos
         token_location = self.prepare_location(img_feats, data)
@@ -569,8 +609,12 @@ class DriveTransformerlHead(BaseModule):
         agent_query = self.agent_query.weight.to(dtype).unsqueeze(0).expand(bs, -1, -1)
         agent_reference_points = self.agent_reference_points.weight.unsqueeze(0).repeat(bs, 1, 1)
         ## Online Mapping
-        map_query = self.map_query.weight.unsqueeze(0).expand(bs, -1, -1)        
-        map_reference_points = self.map_reference_points.weight.unsqueeze(0).repeat(bs, 1, 1)
+        if self.with_mapping:
+            map_query = self.map_query.weight.unsqueeze(0).expand(bs, -1, -1)
+            map_reference_points = self.map_reference_points.weight.unsqueeze(0).repeat(bs, 1, 1)
+        else:
+            map_query = agent_query.new_empty(bs, 0, self.embed_dims)
+            map_reference_points = agent_query.new_empty(bs, 0, 2)
         ## Temporal Alignment
         agent_query, map_query, \
             agent_temp_memory, map_temp_memory, \
@@ -591,19 +635,25 @@ class DriveTransformerlHead(BaseModule):
         agent_prep_ref[..., 0:2] = agent_prep_ref[..., 0:2] + agent_reference_points[..., :2]
         agent_prep_ref[..., 4:5] = agent_prep_ref[..., 4:5] + agent_reference_points[..., 2:3]
 
-        map_pe = self.map_ref_embedding(pos2posemb(map_reference_points, self.embed_dims//2))
-        map_query = self.map_prep_decoder(
-            map_query,
-            img_feats,
-            map_pe,
-            img_pos_embed,
-        )
-        map_query = map_query.float()
-        # get preliminary reference points for map
-        map_prep_class = self.map_cls_branches[-1](map_query)
-        map_prep_pts_coord = self.map_reg_branches[-1](map_query + map_pe)
-        map_prep_pts_coord = map_prep_pts_coord.view(map_query.shape[0], map_query.shape[1], -1, 2) + map_reference_points.unsqueeze(-2)
-        map_prep_box, map_prep_ref  = map_transform_box(map_prep_pts_coord.unsqueeze(0))
+        if self.with_mapping:
+            map_pe = self.map_ref_embedding(pos2posemb(map_reference_points, self.embed_dims//2))
+            map_query = self.map_prep_decoder(
+                map_query,
+                img_feats,
+                map_pe,
+                img_pos_embed,
+            )
+            map_query = map_query.float()
+            # get preliminary reference points for map
+            map_prep_class = self.map_cls_branches[-1](map_query)
+            map_prep_pts_coord = self.map_reg_branches[-1](map_query + map_pe)
+            map_prep_pts_coord = map_prep_pts_coord.view(map_query.shape[0], map_query.shape[1], -1, 2) + map_reference_points.unsqueeze(-2)
+            map_prep_box, map_prep_ref  = map_transform_box(map_prep_pts_coord.unsqueeze(0))
+        else:
+            map_prep_class = agent_query.new_empty(bs, 0, self.map_num_classes)
+            map_prep_pts_coord = agent_query.new_empty(bs, 0, self.map_num_pts_per_vec, 2)
+            map_prep_box = agent_query.new_empty(bs, 0, 4)
+            map_prep_ref = agent_query.new_empty(bs, 0, 2)
         # get preliminary reference points for motion
         mode_query = self.mode_embedding.weight.unsqueeze(0).expand(bs, -1, -1)
         agent_query_mode = (agent_query.unsqueeze(2) + mode_query.unsqueeze(1))
@@ -616,15 +666,28 @@ class DriveTransformerlHead(BaseModule):
         if len(ego_query.shape) == 2:
             ego_query = ego_query.unsqueeze(0)
             
-        if self.ego_multi_modal:
-            mode_anchor_ref = self.anchor_ref.unsqueeze(0).expand(bs, -1, -1, -1)
-            ego_mode_query = self.mode_mlp(pos2posemb(mode_anchor_ref[...,0:2], self.embed_dims//2))  
-            ego_query = (ego_query.unsqueeze(2) + ego_mode_query.unsqueeze(1)).flatten(1,2) # [B,N_mode,D]
-        # get preliminary reference points for planning
-        ego_ref = torch.zeros((ego_query.shape[0], ego_query.shape[1], 3),device=ego_query.device, dtype=ego_query.dtype) 
-        ego_prep_traj_ref_fix_time = self.ego_traj_branches_fix_time[-1](ego_query).view(bs, ego_query.shape[1], self.fut_ts_ego_fix_time, 2)         
-        ego_prep_traj_ref_fix_dist = self.ego_traj_branches_fix_dist[-1](ego_query).view(bs, ego_query.shape[1], self.fut_ts_ego_fix_dist, 1) if self.fut_ego_fix_dist else None
-        ego_prep_traj_cls = self.traj_cls_branches[-1](ego_query) if self.ego_multi_modal else None
+        hip_context = None
+        if self.hip_planner is not None:
+            ego_query, hip_anchors = self.hip_planner.init_queries(ego_query)
+            ego_ref = ego_query.new_zeros(bs, ego_query.shape[1], 3)
+            ego_prep_traj_ref_fix_time = hip_anchors
+            ego_prep_traj_ref_fix_dist = None
+            ego_prep_traj_cls = None
+            hip_context = dict(planner=self.hip_planner, anchors=hip_anchors,
+                               feature_map=hip_feature_map,
+                               lidar2img=data['lidar2img'],
+                               image_hw=hip_feature_map.new_tensor([self.pad_h, self.pad_w])
+                                   .view(1, 1, 2).expand(bs, num_cam, 2))
+        else:
+            if self.ego_multi_modal:
+                mode_anchor_ref = self.anchor_ref.unsqueeze(0).expand(bs, -1, -1, -1)
+                ego_mode_query = self.mode_mlp(pos2posemb(mode_anchor_ref[...,0:2], self.embed_dims//2))
+                ego_query = (ego_query.unsqueeze(2) + ego_mode_query.unsqueeze(1)).flatten(1,2) # [B,N_mode,D]
+            # get preliminary reference points for planning
+            ego_ref = torch.zeros((ego_query.shape[0], ego_query.shape[1], 3),device=ego_query.device, dtype=ego_query.dtype)
+            ego_prep_traj_ref_fix_time = self.ego_traj_branches_fix_time[-1](ego_query).view(bs, ego_query.shape[1], self.fut_ts_ego_fix_time, 2)
+            ego_prep_traj_ref_fix_dist = self.ego_traj_branches_fix_dist[-1](ego_query).view(bs, ego_query.shape[1], self.fut_ts_ego_fix_dist, 1) if self.fut_ego_fix_dist else None
+            ego_prep_traj_cls = self.traj_cls_branches[-1](ego_query) if self.ego_multi_modal else None
         # major transformer 
         agent_query, map_query, ego_query, results = self.transformer(
             agent_query, # [B, N_agent_query, D] ||| queries and position embeddings
@@ -665,14 +728,28 @@ class DriveTransformerlHead(BaseModule):
             ego_traj_branches_fix_dist=self.ego_traj_branches_fix_dist,
             ego_traj_branches_fix_time=self.ego_traj_branches_fix_time,
             ego_traj_cls_branches=self.ego_traj_cls_branches,
+            hip_context=hip_context,
         )
         # collect results
         agent_traj_coords, agent_traj_cls, agent_coords_bev, agent_coords, agent_class, map_pts_coords, map_class, \
         ego_traj_fix_time, ego_traj_fix_dist, ego_traj_cls = list(map(lambda x: torch.stack(x) if not (x is None or x[0] is None) else None, results)) #
-        map_boxes, map_refs = map_transform_box(map_pts_coords)
+        if self.with_mapping:
+            map_boxes, map_refs = map_transform_box(map_pts_coords)
+        else:
+            map_boxes = agent_coords.new_empty(*agent_coords.shape[:2], 0, 4)
+            map_refs = agent_coords.new_empty(*agent_coords.shape[:2], 0, 2)
+        if hip_context is not None:
+            # Keep DT's one-ego-token-per-frame FIFO contract. Store the chosen
+            # mode's four base-group tokens; do not grow it to 480 tokens/frame.
+            mode = hip_context['mode_logits'][-1].argmax(-1)
+            q = ego_query.reshape(bs, 10, 48, self.embed_dims)
+            ego_memory = q[:, :4].gather(2, mode[:, None, None, None]
+                .expand(bs, 4, 1, self.embed_dims)).mean(1)
+        else:
+            ego_memory = ego_query
         # add current feature to memory
         self.post_update_memory(data, rec_ego_pose, agent_class, agent_coords, \
-                                map_class, map_refs[..., :2], agent_query, map_query, ego_query)
+                                map_class, map_refs[..., :2], agent_query, map_query, ego_memory)
         # results from all layers(including initial)
         agent_traj_coords = torch.cat([agent_prep_traj_ref.unsqueeze(0), agent_traj_coords], dim=0)
         agent_traj_cls = torch.cat([agent_prep_traj_cls.unsqueeze(0), agent_traj_cls], dim=0)
@@ -681,9 +758,37 @@ class DriveTransformerlHead(BaseModule):
         map_coords = torch.cat([map_prep_box.unsqueeze(0), map_boxes], dim=0)
         map_pts_coords = torch.cat([map_prep_pts_coord.unsqueeze(0), map_pts_coords], dim=0)
         map_class = torch.cat([map_prep_class.unsqueeze(0), map_class], dim=0)
-        ego_traj_fix_time = torch.cat([ego_prep_traj_ref_fix_time.unsqueeze(0), ego_traj_fix_time], dim=0)
-        ego_traj_fix_dist = torch.cat([ego_prep_traj_ref_fix_dist.unsqueeze(0), ego_traj_fix_dist], dim=0) if ego_traj_fix_dist is not None else None
-        ego_traj_cls = torch.cat([ego_prep_traj_cls.unsqueeze(0), ego_traj_cls], dim=0) if ego_traj_cls is not None else None
+        if hip_context is None:
+            ego_traj_fix_time = torch.cat([ego_prep_traj_ref_fix_time.unsqueeze(0), ego_traj_fix_time], dim=0)
+            ego_traj_fix_dist = torch.cat([ego_prep_traj_ref_fix_dist.unsqueeze(0), ego_traj_fix_dist], dim=0) if ego_traj_fix_dist is not None else None
+            ego_traj_cls = torch.cat([ego_prep_traj_cls.unsqueeze(0), ego_traj_cls], dim=0) if ego_traj_cls is not None else None
+        else:
+            # Legacy metric output is a linear interpolation of the selected
+            # 2 Hz / 3 s prediction, not a new 10 Hz prediction head.
+            times, distances, selections = [], [], []
+            for pred, mode, style in zip(hip_context['preds'],
+                    hip_context['mode_logits'], hip_context['style_logits']):
+                selected = self.hip_planner.decode(pred, mode, style)
+                selections.append(selected)
+                path = selected['plan_temp_2hz']
+                path = torch.cat([path.new_zeros(bs, 1, 2), path], 1)
+                t = torch.arange(1, 31, device=path.device).float() / 5
+                lo, hi = t.floor().long(), t.ceil().long()
+                wt = (t - lo).view(1, -1, 1)
+                times.append(((1-wt)*path[:, lo]+wt*path[:, hi]).unsqueeze(1))
+                # Compatibility scalar for old visualizers only. Closed-loop
+                # control uses explicit XY below, bypassing sin-heading decode.
+                xy = selected['plan_spat_2m']
+                xy = torch.cat([xy.new_zeros(bs, 1, 2), xy], 1)
+                d = (torch.arange(1, 21, device=xy.device).float()/2).clamp(max=6)
+                lo, hi = d.floor().long(), d.ceil().long()
+                wt = (d-lo).view(1, -1, 1)
+                xy = (1-wt)*xy[:, lo]+wt*xy[:, hi]
+                distances.append((xy[..., :1]/xy.norm(dim=-1, keepdim=True)
+                                  .clamp(min=1e-6)).unsqueeze(1))
+            ego_traj_fix_time = torch.stack(times)
+            ego_traj_fix_dist = torch.stack(distances)
+            ego_traj_cls = hip_context['mode_logits']
         outs = {
             'all_cls_scores': agent_class, # [N_layers, B, N_agent_query, N_object_type]
             'all_bbox_preds': agent_coords, # [N_layers, B, N_map_query, N_map_type]
@@ -702,6 +807,11 @@ class DriveTransformerlHead(BaseModule):
             'agent_pre_cls_scores': agent_prep_class, # [B, N_agent_query, N_object_type]
             'agent_pre_coord_preds': agent_prep_ref, # [B, N_agent_query, C_box]
         }
+        if hip_context is not None:
+            outs.update(hip_plan_preds=hip_context['preds'],
+                        hip_mode_logits=hip_context['mode_logits'],
+                        hip_style_logits=hip_context['style_logits'],
+                        hip_selected=selections[-1])
         return outs
         
     def reset_memory(self):
@@ -815,7 +925,8 @@ class DriveTransformerlHead(BaseModule):
                 self.memory_timestamp -= data['timestamp'].reshape(B,1,1)
                 self.memory_egopose = data['ego_pose_inv'].unsqueeze(1) @ self.memory_egopose
                 self.agent_memory_reference_point = transform_reference_points(self.agent_memory_reference_point, data['ego_pose_inv'], reverse=False)
-                self.map_memory_reference_point = transform_reference_points(self.map_memory_reference_point, data['ego_pose_inv'], reverse=False)
+                if self.with_mapping:
+                    self.map_memory_reference_point = transform_reference_points(self.map_memory_reference_point, data['ego_pose_inv'], reverse=False)
                 self.agent_memory_reference_yaw -= torch.arctan2(data['ego_pose'][:,1,0],data['ego_pose'][:,0,0]).unsqueeze(-1).unsqueeze(-1)
                 # pop with FIFO policy, reset memory if meet a new sequence (prev_exists=False)
                 self.memory_timestamp = memory_refresh(self.memory_timestamp[:, :self.memory_len_frame], x)
@@ -854,13 +965,12 @@ class DriveTransformerlHead(BaseModule):
             agent_ref_yaw = -torch.arctan2(agent_bbox_preds[-1,..., 6], agent_bbox_preds[-1,..., 7]).unsqueeze(-1)-torch.pi/2
 
             # z axis of map element is always 0
-            map_ref_point = torch.cat(
-                [map_ref_preds[..., :2], torch.zeros_like(map_ref_preds[..., 0:1])], dim=-1)[-1]
+            if self.with_mapping:
+                map_ref_point = torch.cat(
+                    [map_ref_preds[..., :2], torch.zeros_like(map_ref_preds[..., 0:1])], dim=-1)[-1]
             rec_agent_velo = agent_bbox_preds[..., -2:][-1]
             rec_agent_memory = agent_memory
-            rec_map_memory = map_memory
             rec_agent_score = agent_cls_scores[-1].sigmoid().topk(1, dim=-1).values
-            rec_map_score = map_cls_scores[-1].sigmoid().topk(1, dim=-1).values
             rec_timestamp = np.zeros((rec_agent_score.shape[0],1,1), dtype=np.float64)
 
             _, agent_topk_indexes = torch.topk(rec_agent_score, self.agent_num_propagated, dim=1)
@@ -871,27 +981,33 @@ class DriveTransformerlHead(BaseModule):
             rec_velo = topk_gather(rec_agent_velo, agent_topk_indexes).detach()
             agent_class = topk_gather(agent_cls_scores[-1], agent_topk_indexes).detach()
 
-            _, map_topk_indexes = torch.topk(rec_map_score, self.map_num_propagated, dim=1)
-            rec_map_score = topk_gather(rec_map_score, map_topk_indexes).detach()
-            map_ref_point = topk_gather(map_ref_point, map_topk_indexes).detach()
-            rec_map_memory = topk_gather(rec_map_memory, map_topk_indexes).detach()
-            map_class = topk_gather(map_cls_scores[-1], map_topk_indexes).detach()
+            if self.with_mapping:
+                rec_map_memory = map_memory
+                rec_map_score = map_cls_scores[-1].sigmoid().topk(1, dim=-1).values
+                _, map_topk_indexes = torch.topk(rec_map_score, self.map_num_propagated, dim=1)
+                rec_map_score = topk_gather(rec_map_score, map_topk_indexes).detach()
+                map_ref_point = topk_gather(map_ref_point, map_topk_indexes).detach()
+                rec_map_memory = topk_gather(rec_map_memory, map_topk_indexes).detach()
+                map_class = topk_gather(map_cls_scores[-1], map_topk_indexes).detach()
             # add the feature of current frame to memory
             self.agent_memory_embedding = torch.cat([rec_agent_memory, self.agent_memory_embedding], dim=1)
-            self.map_memory_embedding = torch.cat([rec_map_memory, self.map_memory_embedding], dim=1)
+            if self.with_mapping:
+                self.map_memory_embedding = torch.cat([rec_map_memory, self.map_memory_embedding], dim=1)
             self.ego_memory_embedding = torch.cat([ego_memory.detach(), self.ego_memory_embedding], dim=1)
             self.memory_timestamp = np.concatenate([rec_timestamp, self.memory_timestamp], axis=1)
             self.memory_egopose = torch.cat([rec_ego_pose.detach(), self.memory_egopose], dim=1)
             self.agent_memory_reference_point = torch.cat([agent_ref_point, self.agent_memory_reference_point], dim=1)
             self.agent_memory_reference_yaw = torch.cat([agent_ref_yaw, self.agent_memory_reference_yaw], dim=1)
             self.agent_memory_class = torch.cat([agent_class, self.agent_memory_class], dim=1)
-            self.map_memory_reference_point = torch.cat([map_ref_point, self.map_memory_reference_point], dim=1)
+            if self.with_mapping:
+                self.map_memory_reference_point = torch.cat([map_ref_point, self.map_memory_reference_point], dim=1)
             self.memory_velo = torch.cat([rec_velo, self.memory_velo], dim=1)
             # transform from local to global
             self.agent_memory_reference_point = transform_reference_points(self.agent_memory_reference_point, data['ego_pose'], reverse=False)
             self.agent_memory_reference_yaw += torch.arctan2(data['ego_pose'][:,1,0],data['ego_pose'][:,0,0]).unsqueeze(-1).unsqueeze(-1)
-            self.map_memory_reference_point = transform_reference_points(self.map_memory_reference_point, data['ego_pose'], reverse=False)
-            self.map_memory_class = torch.cat([map_class, self.map_memory_class], dim=1)
+            if self.with_mapping:
+                self.map_memory_reference_point = transform_reference_points(self.map_memory_reference_point, data['ego_pose'], reverse=False)
+                self.map_memory_class = torch.cat([map_class, self.map_memory_class], dim=1)
             self.memory_timestamp += data['timestamp'].reshape(data['timestamp'].shape[0],1,1)
             self.memory_egopose = data['ego_pose'].unsqueeze(1) @ self.memory_egopose
             self.memory_prev_exists = torch.cat([data['prev_exists'].type(torch.float32).unsqueeze(-1).unsqueeze(-1), self.memory_prev_exists], dim=1)
@@ -905,7 +1021,8 @@ class DriveTransformerlHead(BaseModule):
         map_temp_reference_point = self.map_memory_reference_point[...,0:2] 
         ego_temp_reference_point = self.memory_egopose[:,:,0:3,3] 
         agent_temp_pos = self.agent_ref_embedding(pos2posemb(agent_temp_reference_point, self.embed_dims//2))
-        map_temp_pos = self.map_ref_embedding(pos2posemb(map_temp_reference_point, self.embed_dims//2))
+        map_temp_pos = (self.map_ref_embedding(pos2posemb(map_temp_reference_point, self.embed_dims//2))
+                        if self.with_mapping else agent_query.new_empty(B, 0, self.embed_dims))
         ego_temp_pos = self.agent_ref_embedding(pos2posemb(ego_temp_reference_point, self.embed_dims//2))
         agent_temp_memory = self.agent_memory_embedding
         map_temp_memory = self.map_memory_embedding
@@ -928,12 +1045,13 @@ class DriveTransformerlHead(BaseModule):
         memory_timestamp = memory_timestamp_tensor.unsqueeze(2).repeat(1, 1, self.agent_num_propagated, 1).flatten(1, 2)
         time_emded = self.time_embedding(pos2posemb(memory_timestamp, self.embed_dims).float())
         agent_cls_emded = self.agent_cls_embedding(self.agent_memory_class)
-        map_cls_emded = self.map_cls_embedding(self.map_memory_class)
         agent_temp_pos += time_emded # temporal alignment
         agent_temp_pos += agent_cls_emded
         assert self.agent_num_propagated >= self.map_num_propagated
-        map_temp_pos += time_emded[:, :self.map_num_propagated*self.memory_len_frame] # temporal alignment
-        map_temp_pos += map_cls_emded
+        if self.with_mapping:
+            map_cls_emded = self.map_cls_embedding(self.map_memory_class)
+            map_temp_pos += time_emded[:, :self.map_num_propagated*self.memory_len_frame] # temporal alignment
+            map_temp_pos += map_cls_emded
         ego_temp_pos += time_emded[:, ::self.agent_num_propagated]
         return agent_query, map_query, agent_temp_memory, map_temp_memory, agent_temp_pos, map_temp_pos, ego_temp_pos, rec_ego_pose[:, 0:1]
    
@@ -1673,7 +1791,9 @@ class DriveTransformerlHead(BaseModule):
              gt_attr_labels,
              gt_bboxes_ignore=None,
              map_gt_bboxes_ignore=None,
-             img_metas=None):
+             img_metas=None,
+             hip_plan_targets=None,
+             hip_plan_masks=None):
         """"Loss function.
         Args:
 
@@ -1744,26 +1864,27 @@ class DriveTransformerlHead(BaseModule):
         
         l0_agent_loss_cls_all, l0_aggent_loss_bbox_all = self.loss_single_box_only(agent_pre_cls_scores, agent_pre_coord_preds, all_gt_bboxes_list[0], all_gt_labels_list[0], all_gt_bboxes_mask[0])
 
-        num_dec_layers = len(map_all_cls_scores)
-        device = map_all_cls_scores.device
-        map_gt_labels_list = [labels.to(device=device, dtype=torch.long) for labels in map_gt_labels_list]
-        new_map_gt_bboxes_list, map_gt_shifts_pts_list = self._prepare_map_gt(
-            map_gt_bboxes_list, map_gt_labels_list, device)
-        map_loss_gt_mask = torch.ones(len(map_gt_bboxes_list), device=device)
+        if self.with_mapping:
+            num_dec_layers = len(map_all_cls_scores)
+            device = map_all_cls_scores.device
+            map_gt_labels_list = [labels.to(device=device, dtype=torch.long) for labels in map_gt_labels_list]
+            new_map_gt_bboxes_list, map_gt_shifts_pts_list = self._prepare_map_gt(
+                map_gt_bboxes_list, map_gt_labels_list, device)
+            map_loss_gt_mask = torch.ones(len(map_gt_bboxes_list), device=device)
 
-        map_all_gt_bboxes_list = [new_map_gt_bboxes_list for _ in range(num_dec_layers)]
-        map_all_gt_labels_list = [map_gt_labels_list for _ in range(num_dec_layers)]
-        map_all_gt_shifts_pts_list = [map_gt_shifts_pts_list for _ in range(num_dec_layers)]
-        map_all_gt_bboxes_ignore_list = [
-            map_gt_bboxes_ignore for _ in range(num_dec_layers)
-        ]
-        map_all_loss_gt_mask = [map_loss_gt_mask for _ in range(num_dec_layers)]
-        map_losses_cls, map_losses_pts, map_losses_dir = multi_apply(
-            self.map_loss_single, map_all_cls_scores, map_all_bbox_preds,
-            map_all_pts_preds, map_all_gt_bboxes_list, map_all_gt_labels_list,
-            map_all_gt_shifts_pts_list, map_all_loss_gt_mask, map_all_gt_bboxes_ignore_list)
+            map_all_gt_bboxes_list = [new_map_gt_bboxes_list for _ in range(num_dec_layers)]
+            map_all_gt_labels_list = [map_gt_labels_list for _ in range(num_dec_layers)]
+            map_all_gt_shifts_pts_list = [map_gt_shifts_pts_list for _ in range(num_dec_layers)]
+            map_all_gt_bboxes_ignore_list = [
+                map_gt_bboxes_ignore for _ in range(num_dec_layers)
+            ]
+            map_all_loss_gt_mask = [map_loss_gt_mask for _ in range(num_dec_layers)]
+            map_losses_cls, map_losses_pts, map_losses_dir = multi_apply(
+                self.map_loss_single, map_all_cls_scores, map_all_bbox_preds,
+                map_all_pts_preds, map_all_gt_bboxes_list, map_all_gt_labels_list,
+                map_all_gt_shifts_pts_list, map_all_loss_gt_mask, map_all_gt_bboxes_ignore_list)
             
-        l0_loss_map_cls_all, l0_loss_map_pts_all, l0_loss_map_dir_all = self.map_loss_single(map_pre_cls_scores, map_pre_coord_preds, map_pre_pts_coord_preds, map_all_gt_bboxes_list[0], map_all_gt_labels_list[0],map_all_gt_shifts_pts_list[0], map_all_loss_gt_mask[0], map_all_gt_bboxes_ignore_list[0])
+            l0_loss_map_cls_all, l0_loss_map_pts_all, l0_loss_map_dir_all = self.map_loss_single(map_pre_cls_scores, map_pre_coord_preds, map_pre_pts_coord_preds, map_all_gt_bboxes_list[0], map_all_gt_labels_list[0],map_all_gt_shifts_pts_list[0], map_all_loss_gt_mask[0], map_all_gt_bboxes_ignore_list[0])
         
         loss_dict = dict()
         # loss from the last decoder layer
@@ -1771,9 +1892,10 @@ class DriveTransformerlHead(BaseModule):
         loss_dict['loss_bbox'] = losses_bbox[-1]
         loss_dict['loss_traj'] = losses_traj[-1]
         loss_dict['loss_traj_cls'] = losses_traj_cls[-1]
-        loss_dict['loss_map_cls'] = map_losses_cls[-1]
-        loss_dict['loss_map_pts'] = map_losses_pts[-1]
-        loss_dict['loss_map_dir'] = map_losses_dir[-1]
+        if self.with_mapping:
+            loss_dict['loss_map_cls'] = map_losses_cls[-1]
+            loss_dict['loss_map_pts'] = map_losses_pts[-1]
+            loss_dict['loss_map_dir'] = map_losses_dir[-1]
 
         # Planning Loss
         ego_fut_gt_fix_time = ego_fut_gt_fix_time.squeeze(1)
@@ -1785,13 +1907,25 @@ class DriveTransformerlHead(BaseModule):
         loss_plan_input = [ego_fut_preds_traj_fix_time, ego_fut_preds_traj_fix_dist, ego_fut_preds_cls, ego_fut_gt_fix_time, ego_fut_masks_fix_time, 
                            ego_fut_gt_fix_dist, ego_fut_masks_fix_dist, ego_fut_classes]
 
-        loss_plan_reg_fix_time, loss_plan_reg_fix_dist, loss_plan_cls = self.loss_planning(*loss_plan_input)
-        for i in range(len(loss_plan_reg_fix_time)):
-            loss_dict[f"d{i}.loss_plan_l1_fix_time"] = loss_plan_reg_fix_time[i] 
-            if loss_plan_reg_fix_dist is not None:
-                loss_dict[f"d{i}.loss_plan_l1_fix_dist"] = loss_plan_reg_fix_dist[i] 
-            if self.ego_multi_modal:
-                loss_dict[f"d{i}.loss_plan_cls"] = loss_plan_cls[i] 
+        if self.hip_planner is None:
+            loss_plan_reg_fix_time, loss_plan_reg_fix_dist, loss_plan_cls = self.loss_planning(*loss_plan_input)
+            for i in range(len(loss_plan_reg_fix_time)):
+                loss_dict[f"d{i}.loss_plan_l1_fix_time"] = loss_plan_reg_fix_time[i]
+                if loss_plan_reg_fix_dist is not None:
+                    loss_dict[f"d{i}.loss_plan_l1_fix_dist"] = loss_plan_reg_fix_dist[i]
+                if self.ego_multi_modal:
+                    loss_dict[f"d{i}.loss_plan_cls"] = loss_plan_cls[i]
+
+        else:
+            if hip_plan_targets is None or hip_plan_masks is None:
+                raise ValueError('HiP planning requires explicit targets and masks')
+            loss_dict.update(self.hip_planner.loss(
+                preds_dicts['hip_plan_preds'], preds_dicts['hip_mode_logits'],
+                preds_dicts['hip_style_logits'], hip_plan_targets.squeeze(1),
+                hip_plan_masks.squeeze(1)))
+            loss_dict.update(self.hip_planner.diagnostics(
+                preds_dicts['hip_plan_preds'][-1], preds_dicts['hip_mode_logits'][-1],
+                preds_dicts['hip_style_logits'][-1], hip_plan_targets, hip_plan_masks))
 
         loss_dict['d0.loss_cls_all'] = l0_agent_loss_cls_all
         loss_dict['d0.loss_bbox_all'] = l0_aggent_loss_bbox_all
@@ -1808,20 +1942,21 @@ class DriveTransformerlHead(BaseModule):
             loss_dict[f'd{num_dec_layer}.loss_traj'] = loss_traj_i
             num_dec_layer += 1
 
-        loss_dict['d0.loss_map_cls_all'] = l0_loss_map_cls_all
-        loss_dict['d0.loss_map_pts_all'] = l0_loss_map_pts_all
-        loss_dict['d0.loss_map_dir_all'] = l0_loss_map_dir_all
+        if self.with_mapping:
+            loss_dict['d0.loss_map_cls_all'] = l0_loss_map_cls_all
+            loss_dict['d0.loss_map_pts_all'] = l0_loss_map_pts_all
+            loss_dict['d0.loss_map_dir_all'] = l0_loss_map_dir_all
 
-        num_dec_layer = 0
-        for map_loss_cls_i, map_loss_pts_i, map_loss_dir_i in zip(
-            map_losses_cls[:-1],
-            map_losses_pts[:-1],
-            map_losses_dir[:-1]
-        ):
-            loss_dict[f'd{num_dec_layer}.loss_map_cls'] = map_loss_cls_i
-            loss_dict[f'd{num_dec_layer}.loss_map_pts'] = map_loss_pts_i
-            loss_dict[f'd{num_dec_layer}.loss_map_dir'] = map_loss_dir_i
-            num_dec_layer += 1
+            num_dec_layer = 0
+            for map_loss_cls_i, map_loss_pts_i, map_loss_dir_i in zip(
+                map_losses_cls[:-1],
+                map_losses_pts[:-1],
+                map_losses_dir[:-1]
+            ):
+                loss_dict[f'd{num_dec_layer}.loss_map_cls'] = map_loss_cls_i
+                loss_dict[f'd{num_dec_layer}.loss_map_pts'] = map_loss_pts_i
+                loss_dict[f'd{num_dec_layer}.loss_map_dir'] = map_loss_dir_i
+                num_dec_layer += 1
         
         return loss_dict
     
@@ -1846,10 +1981,11 @@ class DriveTransformerlHead(BaseModule):
         
         det_preds_dicts = self.bbox_coder.decode(preds_dicts)
         # map_bboxes: xmin, ymin, xmax, ymax
-        map_preds_dicts = self.map_bbox_coder.decode(preds_dicts)
+        map_preds_dicts = self.map_bbox_coder.decode(preds_dicts) if self.with_mapping else None
         num_samples = len(det_preds_dicts)
-        assert len(det_preds_dicts) == len(map_preds_dicts), \
-             'len(preds_dict) should be equal to len(map_preds_dicts)'
+        if self.with_mapping:
+            assert len(det_preds_dicts) == len(map_preds_dicts), \
+                'len(preds_dict) should be equal to len(map_preds_dicts)'
         ret_list = []
         for i in range(num_samples):
             preds = det_preds_dicts[i]
@@ -1865,11 +2001,14 @@ class DriveTransformerlHead(BaseModule):
             for agent_idx in range(trajs.shape[0]):
                 trajs[agent_idx] = self.rotate_agent_trajs_to_ego(bbox_yaw=yaws[agent_idx], trajs=trajs[agent_idx])
             trajs = trajs.flatten(-2, -1)
-            map_preds = map_preds_dicts[i]
-            map_bboxes = map_preds['map_bboxes']
-            map_scores = map_preds['map_scores']
-            map_labels = map_preds['map_labels']
-            map_pts = map_preds['map_pts']
+            if self.with_mapping:
+                map_preds = map_preds_dicts[i]
+                map_bboxes = map_preds['map_bboxes']
+                map_scores = map_preds['map_scores']
+                map_labels = map_preds['map_labels']
+                map_pts = map_preds['map_pts']
+            else:
+                map_bboxes = map_scores = map_labels = map_pts = None
             ret_list.append([bboxes, scores, labels, trajs, map_bboxes,
                              map_scores, map_labels, map_pts])
 

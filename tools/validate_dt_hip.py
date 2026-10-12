@@ -245,7 +245,6 @@ def cpu_mode(cfg, args):
     return dict(passed=True, finite=True, strict_load=True, suites=suites, config_check=config_check,
                 target_isolation=isolation, real_data=dataset, parameters=parameter_count,
                 small_planner_optimization=descent,
-                small_planner_optimization=descent,
                 complete_attention_forward=('Tiny real head/loss/backward passed using an explicit softmax '
                     'reference backend; full-resolution native CUDA attention awaits the GPU gate'),
                 driving_quality_verified=False)

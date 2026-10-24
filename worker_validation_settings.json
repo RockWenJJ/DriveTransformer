@@ -1,0 +1,8 @@
+{
+  "model_path": "/data5T/wenjj/Projects/DriveTransformer_worktrees/qwen08_frozensem_20260924/weights/2fc06364715b967f1860aea9cf38778875588b17",
+  "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+  "prompt": "Analyze the ego vehicle's current front-view image for trajectory planning. Focus on:\n\n1. Road geometry, lane boundaries, intersections, and drivable space.\n2. Traffic lights, signs, and stop lines, including their relevance to the ego lane.\n3. The relative positions and orientations of vehicles, pedestrians, cyclists, and obstacles.\n4. Visible conditions affecting forward progress, turning, slowing down, stopping, or yielding, including occlusions and visibility limits.\n\nBase the analysis on visible evidence. Preserve uncertainty about unclear signals, right-of-way, and motion that cannot be determined from a single image.",
+  "vision_chunk": 6,
+  "language_chunk": 1,
+  "memory_fraction": 0.16
+}
